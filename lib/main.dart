@@ -135,7 +135,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       });
     } catch (e) {
       setState(() {
-        _version = 'v1.2.6+14';
+        _version = 'v1.2.7+15';
       });
     }
   }
@@ -601,8 +601,11 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                         style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
                       ),
                       Text(
-                        '自動解析中 (5s間隔)',
-                        style: TextStyle(color: Colors.white70, fontSize: 12),
+                        _isListening ? '音声入力中 (解析停止)' : '自動解析中 (5s間隔)',
+                        style: TextStyle(
+                          color: _isListening ? Colors.red[300] : Colors.white70, 
+                          fontSize: 12
+                        ),
                       ),
                     ],
                   ),
