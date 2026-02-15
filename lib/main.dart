@@ -135,7 +135,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       });
     } catch (e) {
       setState(() {
-        _version = 'v1.2.4+12';
+        _version = 'v1.2.5+13';
       });
     }
   }
@@ -391,9 +391,13 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
           break;
       }
 
-      // 3. 音声で伝える
-      await _tts.speak(resultText);
-      print('Analysis result (${AIServiceHelper.getDisplayName(_selectedAI)}): $resultText');
+      // 3. 音声認識中でなければ音声で伝える（重要: 音声認識と音声出力の競合を防ぐ）
+      if (!_isListening) {
+        await _tts.speak(resultText);
+        print('Analysis result (${AIServiceHelper.getDisplayName(_selectedAI)}): $resultText');
+      } else {
+        print('音声認識中のため音声出力をスキップ: $resultText');
+      }
       
     } catch (e) {
       print('Scene analysis failed: $e');
