@@ -135,7 +135,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       });
     } catch (e) {
       setState(() {
-        _version = 'v1.2.3+11';
+        _version = 'v1.2.4+12';
       });
     }
   }
@@ -273,21 +273,13 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   Future<void> _processVoiceCommand(String command) async {
     print('認識された音声コマンド: $command');
     
-    // ノイズや誤認識をフィルタリング
+    // 基本的なクリーニング
     String cleanCommand = command.toLowerCase().trim();
     
-    // 無視するべき誤認識パターン
-    List<String> ignorePatterns = [
-      'アスタリスク', 'asterisk', '*', 
-      'あー', 'えー', 'うー', 'んー',
-      'はい', 'すみません', 'あの', 
-      '', ' ', '。', '、'
-    ];
-    
-    // 短すぎるコマンドや誤認識パターンを除外
-    if (cleanCommand.length < 2 || 
-        ignorePatterns.any((pattern) => cleanCommand.contains(pattern.toLowerCase()))) {
-      print('誤認識またはノイズとして無視: $cleanCommand');
+    // 明らかに無効なパターンのみフィルタリング
+    if (cleanCommand.isEmpty || 
+        cleanCommand == 'アスタリスク' || cleanCommand == 'asterisk' || cleanCommand == '*') {
+      print('無効なコマンドとして無視: $cleanCommand');
       setState(() => _isListening = false);
       return;
     }
@@ -324,7 +316,6 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       }
     } else {
       print('有効なコマンドが見つかりませんでした: $cleanCommand');
-      // 複数の無効コマンドを避けるため、短時間で頻繁にエラーメッセージを出さない
       await _tts.speak('コマンドが理解できませんでした。略語と言うとヘルプを聞けます。');
     }
     
