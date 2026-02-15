@@ -5,7 +5,7 @@ description: "視覚障害者のためのスマ歩道案内アプリ"
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 
 # The following defines the version and build number for your application.
-version: 1.2.5+13
+version: 1.2.6+14
 
 environment:
   sdk: ^3.11.0

@@ -135,7 +135,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       });
     } catch (e) {
       setState(() {
-        _version = 'v1.2.5+13';
+        _version = 'v1.2.6+14';
       });
     }
   }
@@ -352,6 +352,12 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   }
 
   Future<void> _analyzeScene() async {
+    // 音声認識中は画像解析を完全にスキップ（音声入力の妨害を防ぐ）
+    if (_isListening) {
+      print('音声認識中のため自動画像解析をスキップしました');
+      return;
+    }
+    
     if (!_cameraAvailable || _controller == null || !_controller!.value.isInitialized) {
       return;
     }
