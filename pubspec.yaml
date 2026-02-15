@@ -1,0 +1,46 @@
+name: walk_guide
+description: "視覚障害者のためのスマ歩道案内アプリ"
+# The following line prevents the package from being accidentally published to
+# pub.dev using `flutter pub publish`. This is preferred for private packages.
+publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+
+# The following defines the version and build number for your application.
+version: 1.2.3+11
+
+environment:
+  sdk: ^3.11.0
+
+# Dependencies specify other packages that your package needs in order to work.
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8      # iOS style icons
+  flutter_dotenv: ^5.1.0       # 環境変数管理
+  google_generative_ai: ^0.4.0 # Gemini API用
+  camera: ^0.11.0              # カメラ用
+  flutter_tts: ^4.2.2          # 音声読み上げ用
+  speech_to_text: ^7.0.0       # 音声認識用
+  image_picker: ^1.0.4         # 画像選択用（テスト環境向け）
+  package_info_plus: ^4.2.0    # アプリバージョン情報取得
+  http: ^1.6.0                 # HTTP リクエスト用（Claude, ChatGPT API）
+
+  shared_preferences: ^2.2.2   # AI選択設定保存用
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0        # コード品質チェック
+
+# The following section is specific to Flutter packages.
+flutter:
+  # The following line ensures that the Material Icons font is
+  # included with your application, so that you can use the icons in
+  # the material Icons class.
+  uses-material-design: true
+
+  # To add assets to your application, add an assets section, like this:
+  assets:
+    - .walking_guide.env
+
+  # For details regarding fonts from package dependencies,
+  # see https://flutter.dev/to/font-from-package
