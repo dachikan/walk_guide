@@ -306,7 +306,11 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     
     try {
       if (cmd.contains('ヘルプ') || cmd.contains('help')) {
-        await _speak('使えるコマンドです。AI変更は、ジェミニ、クロード、GPT。詳細説明は、景色、説明。停止は、とまれ。');
+        await _speak('使えるコマンドです。AI変更は、ジェミニ、クロード、GPT。詳細説明は、景色、説明。現在のAIは、AI。停止は、とまれ。');
+        
+      } else if (cmd.contains('ai') || cmd.contains('エーアイ') || cmd.contains('現在のai') || cmd.contains('どのai')) {
+        String currentAI = AIServiceHelper.getDisplayName(_selectedAI);
+        await _speak('現在のAIは、$currentAI です');
         
       } else if (cmd.contains('ジェミニ') || cmd.contains('gemini')) {
         await _saveAIPreference(AIService.gemini);
