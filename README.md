@@ -1,17 +1,68 @@
-# walk_guide
+# Walk Guide - 視覚障害者向け歩行支援アプリ
 
-A new Flutter project.
+視覚障害者のための音声誘導歩行支援アプリです。カメラで前方の状況を分析し、安全な歩行をサポートします。
 
-## Getting Started
+## 主な機能
 
-This project is a starting point for a Flutter application.
+- **音声による状況案内**: 前方の状況を日本語で音声案内
+- **音声コマンド認識**: 「景色」「危険」「道」などの音声コマンドに対応
+- **Multi-AI対応**: Google Gemini、Claude、ChatGPTでの詳細分析
+- **アクセシブルUI**: 画面全体をタッチして音声コマンド待機モードに移行
+- **シンプルな操作**: 3つの状態（通常・音声待機・処理中）で直感的操作
 
-A few resources to get you started if this is your first Flutter project:
+## 対応環境
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+- **プラットフォーム**: Android専用
+- **推奨デバイス**: HUAWEI CAN L12（カメラ・音声最適化済み）
+- **言語**: 日本語
+- **Flutter**: 3.11.0以上
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## 使用技術
+
+- **音声認識**: `speech_to_text ^7.0.0`
+- **音声合成**: `flutter_tts ^4.2.2`
+- **カメラ**: `camera`パッケージ
+- **AI API**: HTTP通信による外部AI連携
+
+## インストール
+
+1. リポジトリをクローン:
+   ```bash
+   git clone https://github.com/dachikan/walk_guide.git
+   cd walk_guide
+   ```
+
+2. 依存関係をインストール:
+   ```bash
+   flutter pub get
+   ```
+
+3. Androidデバイスでビルド・実行:
+   ```bash
+   flutter run --release
+   ```
+
+## 使い方
+
+1. アプリを起動すると「前方OK」の音声案内が開始されます
+2. 画面全体をタッチして音声コマンド待機モードに入ります
+3. 以下の音声コマンドが利用可能です：
+   - **「景色」**: 前方の詳しい風景説明
+   - **「危険」**: 危険要素の詳細分析
+   - **「道」**: 歩道や道路状況の説明
+   - **「ジェミニ」「クロード」「チャットGPT」**: AI切り替え
+
+## アーキテクチャ
+
+シンプルで安定した3状態システム:
+- `AppState.normal`: 通常状態（定期的な前方確認）
+- `AppState.listening`: 音声コマンド待機中
+- `AppState.processing`: AI分析・音声出力中
+
+## ライセンス
+
+このプロジェクトはMITライセンスの下で公開されています。
+
+## 開発者向け
+
+詳細な仕様については [Spec.md](Spec.md) を参照してください。
