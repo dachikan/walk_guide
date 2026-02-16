@@ -264,6 +264,12 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       return;
     }
     
+    // 既に音声認識中の場合は一旦停止
+    if (_speech.isListening) {
+      await _speech.stop();
+      await Future.delayed(Duration(milliseconds: 100));
+    }
+    
     print('🎤 音声認識開始');
     setState(() {
       _currentState = AppState.listening;
@@ -275,7 +281,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     await Future.delayed(Duration(seconds: 1));
     
     try {
-      await _speech.listen(
+      bool started = await _speech.listen(
         onResult: (result) {
           if (result.finalResult && result.recognizedWords.isNotEmpty) {
             print('🎯 音声入力: ${result.recognizedWords}');
@@ -286,9 +292,29 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
         listenFor: Duration(seconds: 10),
         pauseFor: Duration(seconds: 3),
       );
+      
+      if (!started) {
+        print('❌ 音声認識の開始に失敗');
+        _returnToNormal();
+        await _speak('音声認識を開始できませんでした');
+        return;
+      }
+      
+      print('✅ 音声認識開始成功');
+      
+      // 10秒後に自動的に通常モードに戻る
+      Timer(Duration(seconds: 11), () {
+        if (_currentState == AppState.listening) {
+          print('⏰ 音声認識タイムアウト - 通常モードに復帰');
+          _speech.stop();
+          _returnToNormal();
+        }
+      });
+      
     } catch (e) {
       print('音声認識エラー: $e');
       _returnToNormal();
+      await _speak('音声認識でエラーが発生しました');
     }
   }
 
