@@ -69,8 +69,15 @@ class AIServiceHelper {
   }
 }
 
+// シンプルな状態管理
+enum AppState {
+  normal,           // 通常状態（解析中）
+  listening,        // 音声コマンド待ち
+  processing,       // コマンド処理中
+}
+
 class WalkingGuideApp extends StatefulWidget {
-  final CameraDescription? camera; // カメラをオプションにする
+  final CameraDescription? camera;
   const WalkingGuideApp({super.key, this.camera});
 
   @override
@@ -81,27 +88,32 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   CameraController? _controller;
   final FlutterTts _tts = FlutterTts();
   final ImagePicker _picker = ImagePicker();
-  Timer? _timer;
+  Timer? _analysisTimer;
   bool _cameraAvailable = false;
   String _version = 'Loading...';
-  AIService _selectedAI = AIService.gemini; // デフォルトはGemini
+  AIService _selectedAI = AIService.gemini;
   final stt.SpeechToText _speech = stt.SpeechToText();
-  bool _isListening = false;
-  bool _speechAvailable = false; // 音声認識が利用可能かどうか
-  Uint8List? _lastCapturedImage; // 直前の画像を保存
+  bool _speechAvailable = false;
+  AppState _currentState = AppState.normal;
+  Uint8List? _lastImage;
 
   @override
   void initState() {
     super.initState();
-    _initializeCamera();
-    _loadPackageInfo();
-    _loadAIPreference();
-    _initializeSpeech();
+    _initializeAll();
+  }
+
+  Future<void> _initializeAll() async {
+    await _initializeCamera();
+    await _loadPackageInfo();
+    await _loadAIPreference();
+    await _initializeSpeech();
+    _startAnalysisTimer();
   }
 
   Future<void> _initializeCamera() async {
     if (widget.camera == null) {
-      print('No camera available, using image picker mode');
+      print('カメラなし：画像選択モード');
       setState(() {
         _cameraAvailable = false;
       });
@@ -116,11 +128,10 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
         setState(() {
           _cameraAvailable = true;
         });
-        // カメラが初期化されたら5秒ごとに解析を実行するタイマーを開始
-        _timer = Timer.periodic(Duration(seconds: 5), (timer) => _analyzeScene());
+        print('✅ カメラ初期化完了');
       }
     } catch (e) {
-      print('Camera initialization failed: $e');
+      print('カメラ初期化失敗: $e');
       setState(() {
         _cameraAvailable = false;
       });
@@ -157,262 +168,236 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   }
 
   Future<void> _initializeSpeech() async {
+    print('🎤 音声認識初期化中...');
     try {
-      print('音声認識の初期化を開始します...');
-      
-      bool available = await _speech.initialize(
-        onStatus: (status) {
-          print('Speech Status: $status');
-          if (status == 'listening') {
-            print('音声認識中...');
-          } else if (status == 'done') {
-            print('音声認識終了');
-            setState(() => _isListening = false);
-          }
-        },
-        onError: (error) {
-          print('Speech Error: $error');
-          setState(() => _isListening = false);
-        },
-      );
-      
+      bool available = await _speech.initialize();
       setState(() {
         _speechAvailable = available;
       });
       
       if (available) {
-        print('音声認識が初期化されました');
-        
-        // 権限の確認
-        bool hasPermission = await _speech.hasPermission;
-        print('音声認識権限: $hasPermission');
-        
-        if (!hasPermission) {
-          print('音声認識権限がありません。自動でリクエストします...');
+        print('✅ 音声認識初期化完了');
+      } else {
+        print('❌ 音声認識利用不可');
+      }
+    } catch (e) {
+      print('音声認識初期化エラー: $e');
+      setState(() {
+        _speechAvailable = false;
+      });
+    }
+  }
+
+  // 解析タイマー開始
+  void _startAnalysisTimer() {
+    if (_cameraAvailable) {
+      _analysisTimer = Timer.periodic(Duration(seconds: 5), (timer) {
+        if (_currentState == AppState.normal) {
+          _analyzeScene();
         }
-        
-        // 利用可能な言語を確認
-        var locales = await _speech.locales();
-        var japaneseLocale = locales.where((l) => l.localeId.contains('ja')).toList();
-        print('日本語ロケール: $japaneseLocale');
-      } else {
-        print('音声認識が利用できません');
-      }
-    } catch (e) {
-      print('音声認識の初期化エラー: $e');
-      setState(() => _speechAvailable = false);
+      });
+      print('⏰ 解析タイマー開始（5秒間隔）');
     }
   }
 
-  Future<void> _startListening() async {
-    if (_isListening) {
-      print('既に音声認識中です');
-      return;
-    }
-    
-    if (!_speechAvailable) {
-      await _tts.speak('音声認識が利用できません');
-      print('音声認識が利用できません');
-      return;
-    }
-    
-    try {
-      // 権限を再確認
-      bool hasPermission = await _speech.hasPermission;
-      print('音声認識権限確認: $hasPermission');
-      
-      if (!hasPermission) {
-        await _tts.speak('マイクの権限が必要です。設定で許可してください');
-        print('マイクの権限がありません');
-        return;
-      }
-      
-      await _tts.speak('命令は何ですか');
-      await Future.delayed(const Duration(seconds: 2)); // TTSが完了するまで待機
-      
-      setState(() => _isListening = true);
-      
-      print('音声認識を開始します...');
-      
-      await _speech.listen(
-        onResult: (result) {
-          print('音声認識結果: ${result.recognizedWords} (final: ${result.finalResult})');
-          if (result.finalResult && result.recognizedWords.isNotEmpty) {
-            _processVoiceCommand(result.recognizedWords);
-          }
-        },
-        localeId: 'ja-JP',
-        listenFor: const Duration(seconds: 10),
-        pauseFor: const Duration(seconds: 3),
-        partialResults: true,
-        onSoundLevelChange: (level) {
-          // 音量レベルをログ出力（デバッグ用）
-          if (level > 0.1) {
-            print('音量レベル: $level');
-          }
-        },
-      );
-    } catch (e) {
-      print('音声認識開始エラー: $e');
-      await _tts.speak('音声認識でエラーが発生しました');
-      setState(() => _isListening = false);
-    }
+  // 解析タイマー停止
+  void _stopAnalysisTimer() {
+    _analysisTimer?.cancel();
+    _analysisTimer = null;
+    print('⏸️ 解析タイマー停止');
   }
 
-  Future<void> _stopListening() async {
-    try {
-      print('音声認識を停止します...');
-      await _speech.stop();
-      setState(() => _isListening = false);
-    } catch (e) {
-      print('音声認識停止エラー: $e');
-      setState(() => _isListening = false);
-    }
-  }
-
-  Future<void> _processVoiceCommand(String command) async {
-    print('認識された音声コマンド: $command');
-    
-    // 基本的なクリーニング
-    String cleanCommand = command.toLowerCase().trim();
-    
-    // 明らかに無効なパターンのみフィルタリング
-    if (cleanCommand.isEmpty || 
-        cleanCommand == 'アスタリスク' || cleanCommand == 'asterisk' || cleanCommand == '*') {
-      print('無効なコマンドとして無視: $cleanCommand');
-      setState(() => _isListening = false);
-      return;
-    }
-    
-    // ヘルプコマンド - 略語の読み上げ
-    if (command.contains('略語') || command.contains('りゃくご') || command.contains('ヘルプ') || command.contains('help')) {
-      await _tts.speak('使える略語です。AI変更は、ジェミニ、クロード、GPT、ジーピーティー。詳細説明は、景色、説明、前方、見える、どんな、詳しく、です。');
-      setState(() => _isListening = false);
-      return;
-    }
-    
-    // AIサービス変更コマンド（よりカジュアルなパターンを追加）
-    if (command.contains('CLAUDE') || command.contains('クロード') || command.contains('claude') 
-        || command.contains('クロードに') || command.contains('クロードを')) {
-      await _saveAIPreference(AIService.claude);
-      await _tts.speak('AIをクロードに変更しました');
-    } else if (command.contains('ChatGPT') || command.contains('チャットGPT') || command.contains('chatgpt')
-               || command.contains('GPT') || command.contains('ジーピーティー') || command.contains('チャットを')) {
-      await _saveAIPreference(AIService.chatgpt);
-      await _tts.speak('AIをチャットGPTに変更しました');
-    } else if (command.contains('Gemini') || command.contains('ジェミニ') || command.contains('gemini')
-              || command.contains('ジェミニに') || command.contains('ジェミニを')) {
-      await _saveAIPreference(AIService.gemini);
-      await _tts.speak('AIをジェミニに変更しました');
-    } 
-    // 景色説明コマンド（より多様なパターンに対応）
-    else if (command.contains('景色') || command.contains('説明') || command.contains('前方') 
-             || command.contains('見える') || command.contains('どんな') || command.contains('詳しく')) {
-      if (_lastCapturedImage != null) {
-        await _tts.speak('画像を詳しく説明します');
-        await _analyzeImage(_lastCapturedImage!);
-      } else {
-        await _tts.speak('分析できる画像がありません');
-      }
-    } else {
-      print('有効なコマンドが見つかりませんでした: $cleanCommand');
-      await _tts.speak('コマンドが理解できませんでした。略語と言うとヘルプを聞けます。');
-    }
-    
-    setState(() => _isListening = false);
-  }
-
-  // 詳細説明用の解析メソッド
-  Future<void> _analyzeImage(Uint8List imageBytes) async {
-    try {
-      String resultText;
-      String detailedPrompt = '目の不自由な方のための詳細な風景説明をお願いします。'
-          '前方に見える景色、道の状況、障害物、建物、人、車両、信号機、標識など、'
-          'すべての重要な情報を具体的に日本語で説明してください。';
-
-      switch (_selectedAI) {
-        case AIService.gemini:
-          resultText = await _analyzeWithGemini(imageBytes, customPrompt: detailedPrompt);
-          break;
-        case AIService.claude:
-          resultText = await _analyzeWithClaude(imageBytes, customPrompt: detailedPrompt);
-          break;
-        case AIService.chatgpt:
-          resultText = await _analyzeWithChatGPT(imageBytes, customPrompt: detailedPrompt);
-          break;
-      }
-
-      await _tts.speak(resultText);
-      print('Detailed analysis result (${AIServiceHelper.getDisplayName(_selectedAI)}): $resultText');
-      
-    } catch (e) {
-      print('Detailed analysis failed: $e');
-      await _tts.speak("詳細な画像解析でエラーが発生しました");
+  // 解析タイマー再開
+  void _resumeAnalysisTimer() {
+    if (_cameraAvailable && _analysisTimer == null) {
+      _startAnalysisTimer();
     }
   }
 
   Future<void> _analyzeScene() async {
-    // 音声認識中は画像解析を完全にスキップ（音声入力の妨害を防ぐ）
-    if (_isListening) {
-      print('音声認識中のため自動画像解析をスキップしました');
-      return;
-    }
-    
     if (!_cameraAvailable || _controller == null || !_controller!.value.isInitialized) {
       return;
     }
-
-    await _captureAndAnalyze(() async {
+    
+    print('📸 自動解析実行');
+    
+    try {
       final image = await _controller!.takePicture();
-      return await image.readAsBytes();
-    });
+      final bytes = await image.readAsBytes();
+      _lastImage = bytes;
+      
+      String result = await _analyzeWithGemini(bytes);
+      
+      // 通常状態でのみTTS実行
+      if (_currentState == AppState.normal) {
+        await _speak(result);
+        print('🔊 解析結果: $result');
+      }
+      
+    } catch (e) {
+      print('解析エラー: $e');
+    }
   }
 
   Future<void> _analyzePickedImage() async {
     final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
     if (image == null) return;
 
-    await _captureAndAnalyze(() async {
-      return await File(image.path).readAsBytes();
-    });
-  }
-
-  Future<void> _captureAndAnalyze(Future<Uint8List> Function() getImageBytes) async {
     try {
-      // 1. 画像を取得
-      final bytes = await getImageBytes();
-      _lastCapturedImage = bytes; // 最新の画像を保存
-
-      // 2. 選択されたAIサービスで解析
-      String resultText;
-      switch (_selectedAI) {
-        case AIService.gemini:
-          resultText = await _analyzeWithGemini(bytes);
-          break;
-        case AIService.claude:
-          resultText = await _analyzeWithClaude(bytes);
-          break;
-        case AIService.chatgpt:
-          resultText = await _analyzeWithChatGPT(bytes);
-          break;
-      }
-
-      // 3. 音声認識中でなければ音声で伝える（重要: 音声認識と音声出力の競合を防ぐ）
-      if (!_isListening) {
-        await _tts.speak(resultText);
-        print('Analysis result (${AIServiceHelper.getDisplayName(_selectedAI)}): $resultText');
-      } else {
-        print('音声認識中のため音声出力をスキップ: $resultText');
-      }
+      final bytes = await File(image.path).readAsBytes();
+      _lastImage = bytes;
+      
+      String result = await _analyzeWithGemini(bytes);
+      await _speak(result);
+      print('🔊 画像解析結果: $result');
       
     } catch (e) {
-      print('Scene analysis failed: $e');
-      await _tts.speak("画像解析でエラーが発生しました");
+      print('画像解析エラー: $e');
+      await _speak('画像解析でエラーが発生しました');
     }
   }
 
-  // Gemini APIでの解析
-  Future<String> _analyzeWithGemini(Uint8List bytes, {String? customPrompt}) async {
+  // 音声認識開始
+  Future<void> _startListening() async {
+    if (!_speechAvailable) {
+      await _speak('音声認識が利用できません');
+      return;
+    }
+    
+    print('🎤 音声認識開始');
+    setState(() {
+      _currentState = AppState.listening;
+    });
+    
+    _stopAnalysisTimer();
+    
+    await _speak('どうぞ');
+    await Future.delayed(Duration(seconds: 1));
+    
+    try {
+      await _speech.listen(
+        onResult: (result) {
+          if (result.finalResult && result.recognizedWords.isNotEmpty) {
+            print('🎯 音声入力: ${result.recognizedWords}');
+            _executeCommand(result.recognizedWords);
+          }
+        },
+        localeId: 'ja-JP',
+        listenFor: Duration(seconds: 10),
+        pauseFor: Duration(seconds: 3),
+      );
+    } catch (e) {
+      print('音声認識エラー: $e');
+      _returnToNormal();
+    }
+  }
+
+  // コマンド実行
+  Future<void> _executeCommand(String command) async {
+    print('⚙️ コマンド実行: $command');
+    
+    setState(() {
+      _currentState = AppState.processing;
+    });
+    
+    await _speech.stop();
+    
+    String cmd = command.toLowerCase().trim();
+    
+    try {
+      if (cmd.contains('ヘルプ') || cmd.contains('help')) {
+        await _speak('使えるコマンドです。AI変更は、ジェミニ、クロード、GPT。詳細説明は、景色、説明。停止は、とまれ。');
+        
+      } else if (cmd.contains('ジェミニ') || cmd.contains('gemini')) {
+        await _saveAIPreference(AIService.gemini);
+        await _speak('AIをジェミニに変更しました');
+        
+      } else if (cmd.contains('クロード') || cmd.contains('claude')) {
+        await _saveAIPreference(AIService.claude);
+        await _speak('AIをクロードに変更しました');
+        
+      } else if (cmd.contains('gpt') || cmd.contains('チャット')) {
+        await _saveAIPreference(AIService.chatgpt);
+        await _speak('AIをチャットGPTに変更しました');
+        
+      } else if (cmd.contains('景色') || cmd.contains('説明') || cmd.contains('詳しく')) {
+        // 詳細説明中は自動解析を完全停止（割り込み防止）
+        _stopAnalysisTimer();
+        print('🚫 詳細説明中：自動解析停止');
+        
+        if (_lastImage != null) {
+          // 短く簡潔なプロンプトで即座開始
+          await _speak('詳細に説明します');
+          
+          // Gemini解析を即座実行（待機時間短縮）
+          print('🔍 Gemini詳細解析開始');
+          String result = await _analyzeWithGemini(_lastImage!, detailedPrompt: true);
+          print('🔍 解析結果取得完了');
+          
+          // 詳細説明を確実に最後まで発話
+          await _speak(result);
+          print('✅ 詳細説明完了');
+          
+        } else {
+          await _speak('分析する画像がありません');
+        }
+        
+      } else if (cmd.contains('停止') || cmd.contains('とまれ')) {
+        await _speak('すべての機能を停止しました');
+        _stopAnalysisTimer();
+        
+      } else {
+        await _speak('コマンドが理解できませんでした。ヘルプと言うと使い方を聞けます。');
+      }
+      
+    } catch (e) {
+      print('コマンド実行エラー: $e');
+      await _speak('コマンド実行でエラーが発生しました');
+    }
+    
+    // コマンド完了後は通常モードに復帰（自動解析再開）
+    await Future.delayed(Duration(seconds: 1));
+    _returnToNormal();
+  }
+
+  // 通常モードに戻る
+  void _returnToNormal() {
+    print('🔄 通常モードに復帰');
+    setState(() {
+      _currentState = AppState.normal;
+    });
+    _resumeAnalysisTimer();
+  }
+
+  // 音声認識停止
+  void _stopListening() {
+    print('⏹️ 音声認識停止');
+    _speech.stop();
+    _returnToNormal();
+  }
+
+  // TTS実行（完了まで確実に待機）
+  Future<void> _speak(String text) async {
+    try {
+      print('🔊 TTS開始: ${text.substring(0, text.length > 30 ? 30 : text.length)}...');
+      
+      await _tts.speak(text);
+      
+      // 文字数に基づく推定時間（日本語：1文字約0.12秒）
+      int estimatedDuration = (text.length * 0.12).ceil();
+      int waitTime = (estimatedDuration + 1).clamp(1, 20); // 1秒〜20秒の範囲
+      
+      print('🕰️ TTS完了待機: ${waitTime}秒');
+      await Future.delayed(Duration(seconds: waitTime));
+      print('✅ TTS完了');
+      
+    } catch (e) {
+      print('TTS エラー: $e');
+    }
+  }
+
+  // Gemini解析
+  Future<String> _analyzeWithGemini(Uint8List bytes, {bool detailedPrompt = false}) async {
     final apiKey = dotenv.env['GEMINI_API_KEY'];
     if (apiKey == null) {
       throw Exception('Gemini APIキーが設定されていません');
@@ -423,8 +408,17 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       apiKey: apiKey,
     );
 
-    final defaultPrompt = "あなたは視覚障害者の歩行支援AIです。画像を見て、前方の状況を『前方OK』『前方危険』、または障害物の位置を『〇時の方向』で短く答えてください。";
-    final prompt = TextPart(customPrompt ?? defaultPrompt);
+    String promptText;
+    if (detailedPrompt) {
+      promptText = '目の不自由な方のための詳細な風景説明をお願いします。' +
+          '前方に見える景色、道の状況、障害物、建物、人、車両、信号機、標識など、' +
+          'すべての重要な情報を具体的に日本語で説明してください。';
+    } else {
+      promptText = 'あなたは視覚障害者の歩行支援AIです。画像を見て、前方の状況を' +
+          '「前方OK」「前方危険」、または障害物の位置を「○時の方向」で短く答えてください。';
+    }
+
+    final prompt = TextPart(promptText);
     final imagePart = DataPart('image/jpeg', bytes);
 
     final response = await model.generateContent([
@@ -434,125 +428,25 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     return response.text ?? "解析できませんでした";
   }
 
-  // Claude APIでの解析
-  Future<String> _analyzeWithClaude(Uint8List bytes, {String? customPrompt}) async {
-    final apiKey = dotenv.env['CLAUDE_API_KEY'];
-    if (apiKey == null || apiKey == 'your_claude_api_key_here') {
-      throw Exception('Claude APIキーが設定されていません');
-    }
-
-    final base64Image = base64Encode(bytes);
-    final defaultPrompt = 'あなたは視覚障害者の歩行支援AIです。画像を見て、前方の状況を「前方OK」「前方危険」、または障害物の位置を「○時の方向」で短く答えてください。';
-    
-    final response = await http.post(
-      Uri.parse('https://api.anthropic.com/v1/messages'),
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: jsonEncode({
-        'model': 'claude-sonnet-4-5-20250929',
-        'max_tokens': 300,
-        'messages': [
-          {
-            'role': 'user',
-            'content': [
-              {
-                'type': 'text',
-                'text': customPrompt ?? defaultPrompt
-              },
-              {
-                'type': 'image',
-                'source': {
-                  'type': 'base64',
-                  'media_type': 'image/jpeg',
-                  'data': base64Image,
-                }
-              }
-            ]
-          }
-        ]
-      }),
-    );
-
-    print('Claude API response status: ${response.statusCode}');
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      if (data['content'] != null && data['content'].isNotEmpty) {
-        return data['content'][0]['text'];
-      } else {
-        throw Exception('Claude API: Empty response content');
-      }
-    } else {
-      print('Claude API error body: ${response.body}');
-      throw Exception('Claude API error: ${response.statusCode} - ${response.body}');
-    }
-  }
-
-  // ChatGPT APIでの解析
-  Future<String> _analyzeWithChatGPT(Uint8List bytes, {String? customPrompt}) async {
-    final apiKey = dotenv.env['OPENAI_API_KEY'];
-    if (apiKey == null || apiKey == 'your_openai_api_key_here') {
-      throw Exception('OpenAI APIキーが設定されていません');
-    }
-
-    // HTTP経由で直接呼び出し（dart_openaiパッケージの問題回避）
-    final base64Image = base64Encode(bytes);
-    final defaultPrompt = 'あなたは視覚障害者の歩行支援AIです。画像を見て、前方の状況を「前方OK」「前方危険」、または障害物の位置を「○時の方向」で短く答えてください。';
-    
-    final response = await http.post(
-      Uri.parse('https://api.openai.com/v1/chat/completions'),
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $apiKey',
-      },
-      body: jsonEncode({
-        'model': 'gpt-4o',  // 最新のモデルを使用
-        'messages': [
-          {
-            'role': 'user',
-            'content': [
-              {
-                'type': 'text',
-                'text': customPrompt ?? defaultPrompt
-              },
-              {
-                'type': 'image_url',
-                'image_url': {
-                  'url': 'data:image/jpeg;base64,$base64Image'
-                }
-              }
-            ]
-          }
-        ],
-        'max_tokens': 300
-      }),
-    );
-    
-    print('ChatGPT API response status: ${response.statusCode}');
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      if (data['choices'] != null && data['choices'].isNotEmpty) {
-        final content = data['choices'][0]['message']['content'];
-        return content ?? '解析できませんでした';
-      } else {
-        throw Exception('ChatGPT API: Empty response choices');
-      }
-    } else {
-      print('ChatGPT API error body: ${response.body}');
-      throw Exception('ChatGPT API error: ${response.statusCode} - ${response.body}');
+  String _getStateDisplayName() {
+    switch (_currentState) {
+      case AppState.normal:
+        return '📸 通常解析中';
+      case AppState.listening:
+        return '🎤 音声待機中';
+      case AppState.processing:
+        return '⚙️ 処理中';
     }
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
+    _analysisTimer?.cancel();
     _controller?.dispose();
+    _tts.stop();
     super.dispose();
   }
 
-  @override
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -561,10 +455,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
           children: [
             Text('歩道案内'),
             Spacer(),
-            Text(
-              _version,
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.normal),
-            ),
+            Text(_version, style: TextStyle(fontSize: 14)),
           ],
         ),
         backgroundColor: Colors.blue[700],
@@ -577,13 +468,22 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
         ],
       ),
       body: _cameraAvailable && _controller != null && _controller!.value.isInitialized 
-        ? Stack(
-            children: [
-              // カメラ画面を全画面に拡張
+        ? GestureDetector(
+            // 画面全体タッチで音声認識開始（視覚障碍者に優しい）
+            onTap: () {
+              print('👆 画面タッチで音声認識操作');
+              if (_currentState == AppState.listening) {
+                _stopListening();
+              } else if (_currentState == AppState.normal) {
+                _startListening();
+              }
+            },
+            child: Stack(
+              children: [
               Positioned.fill(
                 child: CameraPreview(_controller!),
               ),
-              // 左上にAI情報を表示
+              // 状態表示
               Positioned(
                 top: 16,
                 left: 16,
@@ -601,76 +501,35 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                         style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
                       ),
                       Text(
-                        _isListening ? '音声入力中 (解析停止)' : '自動解析中 (5s間隔)',
-                        style: TextStyle(
-                          color: _isListening ? Colors.red[300] : Colors.white70, 
-                          fontSize: 12
-                        ),
+                        _getStateDisplayName(),
+                        style: TextStyle(color: Colors.white, fontSize: 12),
                       ),
                     ],
                   ),
                 ),
               ),
-              // 右下に命令受付ボタン
+              // マイクボタン
               Positioned(
                 bottom: 16,
                 right: 16,
                 child: FloatingActionButton(
-                  backgroundColor: _isListening 
+                  backgroundColor: _currentState == AppState.listening 
                       ? Colors.red 
                       : (_speechAvailable ? Colors.blue[700] : Colors.grey),
                   foregroundColor: Colors.white,
-                  child: Icon(_isListening ? Icons.mic : Icons.mic_none),
+                  child: Icon(_currentState == AppState.listening ? Icons.mic : Icons.mic_none),
                   onPressed: () {
-                    print('音声ボタンが押されました');
-                    print('音声認識利用可能: $_speechAvailable');
-                    print('現在聞いています: $_isListening');
-                    
-                    if (_speechAvailable) {
-                      _isListening ? _stopListening() : _startListening();
-                    } else {
-                      _tts.speak('音声認識が利用できません。初期化をやり直します。');
-                      _initializeSpeech();
+                    if (_currentState == AppState.listening) {
+                      _stopListening();
+                    } else if (_currentState == AppState.normal) {
+                      _startListening();
                     }
                   },
                 ),
               ),
-              // 音声認識の状態インジケーター
-              if (_isListening)
-                Positioned(
-                  bottom: 90,
-                  right: 16,
-                  child: Container(
-                    padding: EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.red.withOpacity(0.9),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      '聞いています...',
-                      style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ),
-              // 音声認識利用不可の場合の表示
-              if (!_speechAvailable)
-                Positioned(
-                  bottom: 90,
-                  right: 16,
-                  child: Container(
-                    padding: EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.orange.withOpacity(0.9),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      '音声認識無効',
-                      style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ),
             ],
-          )
+          ),
+        )
         : Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -687,16 +546,6 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                   style: TextStyle(fontSize: 16),
                   textAlign: TextAlign.center,
                 ),
-                SizedBox(height: 8),
-                Text(
-                  'AI: ${AIServiceHelper.getDisplayName(_selectedAI)}',
-                  style: TextStyle(fontSize: 14, color: Colors.blue[600]),
-                ),
-                SizedBox(height: 4),
-                Text(
-                  'Version: $_version',
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                ),
                 SizedBox(height: 30),
                 ElevatedButton.icon(
                   onPressed: _analyzePickedImage,
@@ -705,7 +554,6 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.blue[700],
                     foregroundColor: Colors.white,
-                    padding: EdgeInsets.symmetric(horizontal: 24, vertical: 16),
                   ),
                 ),
               ],
@@ -725,7 +573,6 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
             children: AIService.values.map((service) {
               return RadioListTile<AIService>(
                 title: Text(AIServiceHelper.getDisplayName(service)),
-                subtitle: Text(_getAIDescription(service)),
                 value: service,
                 groupValue: _selectedAI,
                 onChanged: (AIService? value) {
@@ -746,16 +593,5 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
         );
       },
     );
-  }
-
-  String _getAIDescription(AIService service) {
-    switch (service) {
-      case AIService.gemini:
-        return '標準・高速・無料枚数が多い';
-      case AIService.claude:
-        return '高品質・日本語が得意';
-      case AIService.chatgpt:
-        return '安定性高・実績豊富';
-    }
   }
 }
