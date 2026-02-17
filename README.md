@@ -54,10 +54,10 @@
 
 ## アーキテクチャ
 
-シンプルで安定した3状態システム:
-- `AppState.normal`: 通常状態（定期的な前方確認）
-- `AppState.listening`: 音声コマンド待機中
-- `AppState.processing`: AI分析・音声出力中
+シンプルで安定した3状態システム（マイクボタン色分け）:
+- `AppState.normal`: 通常状態（🔵青ボタン・定期的な前方確認）
+- `AppState.listening`: 音声コマンド待機中（🔴赤ボタン・音声受付中）
+- `AppState.processing`: AI分析・音声出力中（🔴赤ボタン・処理実行中）
 
 ## ライセンス
 

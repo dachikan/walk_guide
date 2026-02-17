@@ -454,7 +454,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   String _getStateDisplayName() {
     switch (_currentState) {
       case AppState.normal:
-        return '📸 通常解析中';
+        return '� 通常解析中';
       case AppState.listening:
         return '🎤 音声待機中';
       case AppState.processing:
@@ -536,11 +536,12 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                 bottom: 16,
                 right: 16,
                 child: FloatingActionButton(
-                  backgroundColor: _currentState == AppState.listening 
+                  backgroundColor: (_currentState == AppState.listening || _currentState == AppState.processing)
                       ? Colors.red 
                       : (_speechAvailable ? Colors.blue[700] : Colors.grey),
                   foregroundColor: Colors.white,
-                  child: Icon(_currentState == AppState.listening ? Icons.mic : Icons.mic_none),
+                  child: Icon((_currentState == AppState.listening || _currentState == AppState.processing) 
+                      ? Icons.mic : Icons.mic_none),
                   onPressed: () {
                     if (_currentState == AppState.listening) {
                       _stopListening();
