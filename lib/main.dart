@@ -277,7 +277,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     await Future.delayed(Duration(seconds: 1));
     
     try {
-      print('🎤 音声認識ライブラリ開始...');
+      print('🎤 音声認識開始（継続待機モード）');
       
       await _speech.listen(
         onResult: (result) {
@@ -287,15 +287,12 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
           }
         },
         localeId: 'ja-JP',
-        listenFor: Duration(seconds: 10),
+        listenFor: Duration(seconds: 300), // 5分間継続（実質ユーザーが止めるまで）
         pauseFor: Duration(seconds: 3),
       );
       
-      // 音声認識終了後、まだlistening状態なら通常に戻す
-      if (_currentState == AppState.listening) {
-        print('⏰ 音声認識終了 → normal状態に戻る');
-        _returnToNormal();
-      }
+      // listening状態が維持されているなら、音声認識を継続
+      // （ユーザーが手動停止した場合のみ状態が変わる）
       
     } catch (e) {
       print('音声認識エラー: $e');
