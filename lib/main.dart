@@ -264,7 +264,13 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       return;
     }
     
-    print('🎤 音声認識開始準備');
+    print('🎤 音声認識開始');
+    
+    // 即座に状態変更（ユーザーフィードバック優先）
+    setState(() {
+      _currentState = AppState.listening;
+    });
+    
     _stopAnalysisTimer();
     
     await _speak('どうぞ');
@@ -273,7 +279,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     try {
       print('🎤 音声認識ライブラリ開始...');
       
-      bool listenSuccess = await _speech.listen(
+      await _speech.listen(
         onResult: (result) {
           if (result.finalResult && result.recognizedWords.isNotEmpty) {
             print('🎯 音声入力: ${result.recognizedWords}');
@@ -285,16 +291,10 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
         pauseFor: Duration(seconds: 3),
       );
       
-      // 音声認識が実際に開始してから状態変更（状態の役割を果たすため）
-      if (listenSuccess) {
-        print('✅ 音声認識成功 → listening状態に変更');
-        setState(() {
-          _currentState = AppState.listening;
-        });
-      } else {
-        print('❌ 音声認識開始失敗 → normal状態を維持');
+      // 音声認識終了後、まだlistening状態なら通常に戻す
+      if (_currentState == AppState.listening) {
+        print('⏰ 音声認識終了 → normal状態に戻る');
         _returnToNormal();
-        await _speak('音声認識を開始できませんでした');
       }
       
     } catch (e) {
@@ -433,12 +433,17 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
 
     String promptText;
     if (detailedPrompt) {
-      promptText = '目の不自由な方のための詳細な風景説明をお願いします。' +
+      promptText = '【重要】あなたは視覚障害者の命を預かる歩行介助者です。' +
           '前方に見える景色、道の状況、障害物、建物、人、車両、信号機、標識など、' +
-          'すべての重要な情報を具体的に日本語で説明してください。';
+          'すべての重要な情報を具体的に日本語で説明してください。' +
+          '少しでも危険の可能性があるものは必ず指摘してください。';
     } else {
-      promptText = 'あなたは視覚障害者の歩行支援AIです。画像を見て、前方の状況を' +
-          '「前方OK」「前方危険」、または障害物の位置を「○時の方向」で短く答えてください。';
+      promptText = '【緊急重要】あなたは視覚障害者の歩行を支援する介助者AIです。この人の命と安全があなたの判断にかかっています。' +
+          '画像を慎重に分析し、以下の基準で判断してください：' +
+          '■「前方OK」は本当に完全に安全な場合のみ使用' +
+          '■少しでも障害物・段差・工事・人・車両・不明物があれば「前方注意」または具体的位置「○時の方向に△△があります」' +
+          '■見えにくい・判断困難な場合は「注意して進んでください」' +
+          '■安全すぎる判断は良いことです。見落としは絶対に避けてください。';
     }
 
     final prompt = TextPart(promptText);
