@@ -264,18 +264,16 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       return;
     }
     
-    print('🎤 音声認識開始');
-    setState(() {
-      _currentState = AppState.listening;
-    });
-    
+    print('🎤 音声認識開始準備');
     _stopAnalysisTimer();
     
     await _speak('どうぞ');
     await Future.delayed(Duration(seconds: 1));
     
     try {
-      await _speech.listen(
+      print('🎤 音声認識ライブラリ開始...');
+      
+      bool listenSuccess = await _speech.listen(
         onResult: (result) {
           if (result.finalResult && result.recognizedWords.isNotEmpty) {
             print('🎯 音声入力: ${result.recognizedWords}');
@@ -286,6 +284,19 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
         listenFor: Duration(seconds: 10),
         pauseFor: Duration(seconds: 3),
       );
+      
+      // 音声認識が実際に開始してから状態変更（状態の役割を果たすため）
+      if (listenSuccess) {
+        print('✅ 音声認識成功 → listening状態に変更');
+        setState(() {
+          _currentState = AppState.listening;
+        });
+      } else {
+        print('❌ 音声認識開始失敗 → normal状態を維持');
+        _returnToNormal();
+        await _speak('音声認識を開始できませんでした');
+      }
+      
     } catch (e) {
       print('音声認識エラー: $e');
       _returnToNormal();
@@ -371,6 +382,14 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       _currentState = AppState.normal;
     });
     _resumeAnalysisTimer();
+  }
+  
+  // 状態の役割履行チェック
+  void _validateStateRole() {
+    if (_currentState == AppState.listening && !_speech.isListening) {
+      print('⚠️ 状態役割不一致検出: listening状態なのに音声認識停止中');
+      _returnToNormal();
+    }
   }
 
   // 音声認識停止
