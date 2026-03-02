@@ -14,17 +14,17 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  cupertino_icons: ^1.0.8      # iOS style icons
-  flutter_dotenv: ^5.1.0       # 環境変数管理
-  google_generative_ai: ^0.4.0 # Gemini API用
-  camera: ^0.11.0              # カメラ用
-  flutter_tts: ^4.2.2          # 音声読み上げ用
-  speech_to_text: ^7.0.0       # 音声認識用
-  image_picker: ^1.0.4         # 画像選択用（テスト環境向け）
-  package_info_plus: ^4.2.0    # アプリバージョン情報取得
-  http: ^1.6.0                 # HTTP リクエスト用（Claude, ChatGPT API）
-
-  shared_preferences: ^2.2.2   # AI選択設定保存用
+  cupertino_icons: 1.0.8       # 厳密固定
+  flutter_dotenv: 5.1.0        # 厳密固定
+  google_generative_ai: 0.4.0  # 厳密固定
+  camera: 0.11.3+1             # 安定動作時の実バージョンに固定
+  flutter_tts: 4.2.2           # 厳密固定
+  speech_to_text: 7.3.0        # 安定動作時の実バージョンに固定
+  image_picker: 1.0.4          # 厳密固定
+  package_info_plus: 4.2.0     # 厳密固定
+  http: 1.2.2                  # 依存関係(web package)の競合を解消する特定バージョンに固定
+  shared_preferences: 2.2.2    # 厳密固定
+  permission_handler: 11.3.1   # 明示的に安定版に固定して不備を阻止
 
 dev_dependencies:
   flutter_test:
