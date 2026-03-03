@@ -149,7 +149,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
 
   Future<void> _loadProjectVersion() async {
     setState(() {
-      _version = 'v0.0.3+3';
+      _version = 'v0.0.3+4';
     });
   }
 
@@ -157,11 +157,11 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     try {
       PackageInfo packageInfo = await PackageInfo.fromPlatform();
       setState(() {
-        _version = 'v0.0.3+3'; // バージョンを明示的にハードコードして確実にする
+        _version = 'v0.0.3+4'; // バージョンを明示的にハードコード
       });
     } catch (e) {
       setState(() {
-        _version = 'v0.0.3+3';
+        _version = 'v0.0.3+4';
       });
     }
   }
@@ -293,9 +293,9 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     // 継続的なバイブレーション（受付中であることを示し続ける）
     Timer? vibrationTimer;
     void startContinuousVibration() {
-      vibrationTimer = Timer.periodic(Duration(milliseconds: 1000), (timer) {
+      vibrationTimer = Timer.periodic(Duration(milliseconds: 800), (timer) {
         if (_currentState == AppState.listening) {
-          // Huawei等のバイブ性能が低い端末向けに、より明確なvibrateを使用
+          // 間隔を短く、より確実に
           HapticFeedback.vibrate(); 
         } else {
           timer.cancel();
@@ -310,9 +310,10 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       print('🎤 SpeechToText.listen 実行 (onDevice: true)');
       
       // 受付開始の合図（強めのバイブ 5回繰り返して確実に伝える）
+      // Huawei端末向けに振動時間を確保
       for (int i = 0; i < 5; i++) {
         await HapticFeedback.vibrate(); 
-        await Future.delayed(Duration(milliseconds: 100));
+        await Future.delayed(Duration(milliseconds: 200)); // 間隔を広げて確実に
       }
       startContinuousVibration(); // 受付中の継続バイブ開始
       print('📳 バイブレーション開始：受付中');
