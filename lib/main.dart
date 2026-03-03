@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:camera/camera.dart';
@@ -257,43 +258,54 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     }
   }
 
-  // 音声認識開始
+  // 音声認識開始 (Pixel 8 / Jelly 対応強化版)
   Future<void> _startListening() async {
     if (!_speechAvailable) {
       await _speak('音声認識が利用できません');
       return;
     }
+
+    print('🎤 音声認識セッション準備開始');
     
-    print('🎤 音声認識開始');
+    // 1. 割り込み防止：TTS（読み上げ）を即座に停止
+    await _tts.stop();
     
-    // 即座に状態変更（ユーザーフィードバック優先）
+    // 2. 状態変更
     setState(() {
       _currentState = AppState.listening;
     });
-    
     _stopAnalysisTimer();
-    
-    await _speak('どうぞ');
-    await Future.delayed(Duration(seconds: 1));
-    
+
+    // 3. オーディオセッションの競合回避のための微小待機
+    await Future.delayed(Duration(milliseconds: 100));
+
     try {
-      print('🎤 音声認識開始（継続待機モード）');
+      print('🎤 SpeechToText.listen 実行 (onDevice: true)');
       
-      await _speech.listen(
+      bool started = await _speech.listen(
         onResult: (result) {
           if (result.finalResult && result.recognizedWords.isNotEmpty) {
-            print('🎯 音声入力: ${result.recognizedWords}');
+            print('🎯 認識成功: ${result.recognizedWords}');
             _executeCommand(result.recognizedWords);
           }
         },
         localeId: 'ja-JP',
-        listenFor: Duration(seconds: 300), // 5分間継続（実質ユーザーが止めるまで）
+        onDevice: true, // Pixel 8等で高速・安定するオンデバイス認識を優先
+        listenMode: stt.ListenMode.confirmation, // 短いコマンド向けに最適化
+        listenFor: Duration(seconds: 30),
         pauseFor: Duration(seconds: 3),
       );
-      
-      // listening状態が維持されているなら、音声認識を継続
-      // （ユーザーが手動停止した場合のみ状態が変わる）
-      
+
+      if (started) {
+        // マイクが物理的に開いたタイミングでバイブ（触覚フィードバック）
+        // ユーザーは「震えたら話し始めてOK」と直感的に理解できる
+        await HapticFeedback.mediumImpact();
+        print('📳 バイブレーション実行：受付開始');
+      } else {
+        print('❌ 音声認識の開始に失敗しました');
+        _returnToNormal();
+      }
+
     } catch (e) {
       print('音声認識エラー: $e');
       _returnToNormal();
@@ -437,10 +449,10 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     } else {
       promptText = '【緊急重要】あなたは視覚障害者の歩行を支援する介助者AIです。この人の命と安全があなたの判断にかかっています。' +
           '画像を慎重に分析し、以下の基準で判断してください：' +
-          '■「前方OK」は本当に完全に安全な場合のみ使用' +
-          '■少しでも障害物・段差・工事・人・車両・不明物があれば「前方注意」または具体的位置「○時の方向に△△があります」' +
-          '■見えにくい・判断困難な場合は「注意して進んでください」' +
-          '■安全すぎる判断は良いことです。見落としは絶対に避けてください。';
+          '■「前方OK」は本当に完全に絶対的な安全が確認できた場合のみ使用してください。' +
+          '■少しでも障害物、段差、工事、人、車両、不明な物体がある場合は、迷わず「前方注意」または具体的に位置を「○時の方向に△△があります」と伝えてください。' +
+          '■逆光やボケなどで判断が困難な場合は、憶測で安全と言わず「状況が不明です。注意して進んでください」と警告してください。' +
+          '■過剰に安全側の判断をすることは、この状況では正しい行動です。見落としは許されません。';
     }
 
     final prompt = TextPart(promptText);
@@ -456,11 +468,11 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   String _getStateDisplayName() {
     switch (_currentState) {
       case AppState.normal:
-        return '� 通常解析中';
+        return '🔵 通常解析中';
       case AppState.listening:
-        return '🎤 音声待機中';
+        return '🟣 音声受付中';
       case AppState.processing:
-        return '⚙️ 処理中';
+        return '🔴 処理中';
     }
   }
 
@@ -538,9 +550,9 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                 bottom: 16,
                 right: 16,
                 child: FloatingActionButton(
-                  backgroundColor: (_currentState == AppState.listening || _currentState == AppState.processing)
-                      ? Colors.red 
-                      : (_speechAvailable ? Colors.blue[700] : Colors.grey),
+                  backgroundColor: _currentState == AppState.listening
+                      ? Colors.purple
+                      : (_currentState == AppState.processing ? Colors.red : (_speechAvailable ? Colors.blue[700] : Colors.grey)),
                   foregroundColor: Colors.white,
                   child: Icon((_currentState == AppState.listening || _currentState == AppState.processing) 
                       ? Icons.mic : Icons.mic_none),
