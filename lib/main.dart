@@ -147,7 +147,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       });
     } catch (e) {
       setState(() {
-        _version = 'v1.2.7+15';
+        _version = 'v0.0.3+1';
       });
     }
   }
@@ -277,10 +277,14 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     _stopAnalysisTimer();
 
     // 3. オーディオセッションの競合回避のための微小待機
-    await Future.delayed(Duration(milliseconds: 100));
+    await Future.delayed(Duration(milliseconds: 200));
 
     try {
       print('🎤 SpeechToText.listen 実行 (onDevice: true)');
+      
+      // マイクを開く直前に、確実にバイブレーションを鳴らす
+      await HapticFeedback.vibrate(); // 最も確実なバイブレーション
+      print('📳 バイブレーション実行：受付準備完了');
       
       bool started = await _speech.listen(
         onResult: (result) {
@@ -290,18 +294,14 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
           }
         },
         localeId: 'ja-JP',
-        onDevice: true, // Pixel 8等で高速・安定するオンデバイス認識を優先
-        listenMode: stt.ListenMode.confirmation, // 短いコマンド向けに最適化
-        listenFor: Duration(seconds: 30),
+        onDevice: true, 
+        listenMode: stt.ListenMode.confirmation, 
+        listenFor: Duration(seconds: 15),
         pauseFor: Duration(seconds: 3),
+        cancelOnError: true,
       );
 
-      if (started) {
-        // マイクが物理的に開いたタイミングでバイブ（触覚フィードバック）
-        // ユーザーは「震えたら話し始めてOK」と直感的に理解できる
-        await HapticFeedback.mediumImpact();
-        print('📳 バイブレーション実行：受付開始');
-      } else {
+      if (!started) {
         print('❌ 音声認識の開始に失敗しました');
         _returnToNormal();
       }
@@ -539,12 +539,30 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                       ),
                       Text(
                         _getStateDisplayName(),
-                        style: TextStyle(color: Colors.white, fontSize: 12),
+                        style: TextStyle(
+                          color: _currentState == AppState.listening ? Colors.purpleAccent : Colors.white, 
+                          fontSize: 16, 
+                          fontWeight: FontWeight.bold
+                        ),
                       ),
                     ],
                   ),
                 ),
               ),
+              // 音声入力待機中の視覚的強調（画面中央に大きな紫の円）
+              if (_currentState == AppState.listening)
+                Center(
+                  child: Container(
+                    width: 200,
+                    height: 200,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.purple.withOpacity(0.3),
+                      border: Border.all(color: Colors.purple, width: 4),
+                    ),
+                    child: Icon(Icons.mic, color: Colors.purple, size: 80),
+                  ),
+                ),
               // マイクボタン
               Positioned(
                 bottom: 16,
