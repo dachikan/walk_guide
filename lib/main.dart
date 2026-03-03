@@ -143,11 +143,11 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     try {
       PackageInfo packageInfo = await PackageInfo.fromPlatform();
       setState(() {
-        _version = 'v${packageInfo.version}+${packageInfo.buildNumber}';
+        _version = 'v0.0.3+2'; // バージョンを明示的にハードコードして確実にする
       });
     } catch (e) {
       setState(() {
-        _version = 'v0.0.3+1';
+        _version = 'v0.0.3+2';
       });
     }
   }
@@ -258,7 +258,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     }
   }
 
-  // 音声認識開始 (Pixel 8 / Jelly 対応強化版)
+  // 音声認識開始 (Pixel 8 / Jelly / Huawei 対応強化版)
   Future<void> _startListening() async {
     if (!_speechAvailable) {
       await _speak('音声認識が利用できません');
@@ -276,38 +276,54 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     });
     _stopAnalysisTimer();
 
+    // 継続的なバイブレーション（受付中であることを示し続ける）
+    Timer? vibrationTimer;
+    void startContinuousVibration() {
+      vibrationTimer = Timer.periodic(Duration(milliseconds: 1500), (timer) {
+        if (_currentState == AppState.listening) {
+          HapticFeedback.lightImpact();
+        } else {
+          timer.cancel();
+        }
+      });
+    }
+
     // 3. オーディオセッションの競合回避のための微小待機
     await Future.delayed(Duration(milliseconds: 200));
 
     try {
       print('🎤 SpeechToText.listen 実行 (onDevice: true)');
       
-      // マイクを開く直前に、確実にバイブレーションを鳴らす
-      await HapticFeedback.vibrate(); // 最も確実なバイブレーション
-      print('📳 バイブレーション実行：受付準備完了');
+      // 受付開始の合図（強めのバイブ）
+      await HapticFeedback.vibrate(); 
+      startContinuousVibration(); // 受付中の継続バイブ開始
+      print('📳 バイブレーション開始：受付中');
       
       bool started = await _speech.listen(
         onResult: (result) {
           if (result.finalResult && result.recognizedWords.isNotEmpty) {
             print('🎯 認識成功: ${result.recognizedWords}');
+            vibrationTimer?.cancel(); // 認識成功したらバイブ停止
             _executeCommand(result.recognizedWords);
           }
         },
         localeId: 'ja-JP',
         onDevice: true, 
         listenMode: stt.ListenMode.confirmation, 
-        listenFor: Duration(seconds: 15),
-        pauseFor: Duration(seconds: 3),
+        listenFor: Duration(seconds: 15), // 最大15秒待機
+        pauseFor: Duration(seconds: 3),  // 3秒無音で自動終了
         cancelOnError: true,
       );
 
       if (!started) {
         print('❌ 音声認識の開始に失敗しました');
+        vibrationTimer?.cancel();
         _returnToNormal();
       }
 
     } catch (e) {
       print('音声認識エラー: $e');
+      vibrationTimer?.cancel();
       _returnToNormal();
     }
   }
