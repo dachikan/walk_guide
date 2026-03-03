@@ -77,6 +77,13 @@ enum AppState {
   processing,       // コマンド処理中
 }
 
+// ガイドモードの種類
+enum GuideMode {
+  sidewalk, // 歩道
+  whiteLine, // 白線
+  general,  // 一般歩行
+}
+
 class WalkingGuideApp extends StatefulWidget {
   final CameraDescription? camera;
   const WalkingGuideApp({super.key, this.camera});
@@ -93,6 +100,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   bool _cameraAvailable = false;
   String _version = 'Loading...';
   AIService _selectedAI = AIService.gemini;
+  GuideMode _currentGuideMode = GuideMode.general;
   final stt.SpeechToText _speech = stt.SpeechToText();
   bool _speechAvailable = false;
   AppState _currentState = AppState.normal;
@@ -139,15 +147,21 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     }
   }
 
+  Future<void> _loadProjectVersion() async {
+    setState(() {
+      _version = 'v0.0.3+3';
+    });
+  }
+
   Future<void> _loadPackageInfo() async {
     try {
       PackageInfo packageInfo = await PackageInfo.fromPlatform();
       setState(() {
-        _version = 'v0.0.3+2'; // バージョンを明示的にハードコードして確実にする
+        _version = 'v0.0.3+3'; // バージョンを明示的にハードコードして確実にする
       });
     } catch (e) {
       setState(() {
-        _version = 'v0.0.3+2';
+        _version = 'v0.0.3+3';
       });
     }
   }
@@ -279,9 +293,10 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     // 継続的なバイブレーション（受付中であることを示し続ける）
     Timer? vibrationTimer;
     void startContinuousVibration() {
-      vibrationTimer = Timer.periodic(Duration(milliseconds: 1500), (timer) {
+      vibrationTimer = Timer.periodic(Duration(milliseconds: 1000), (timer) {
         if (_currentState == AppState.listening) {
-          HapticFeedback.lightImpact();
+          // Huawei等のバイブ性能が低い端末向けに、より明確なvibrateを使用
+          HapticFeedback.vibrate(); 
         } else {
           timer.cancel();
         }
@@ -294,8 +309,11 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     try {
       print('🎤 SpeechToText.listen 実行 (onDevice: true)');
       
-      // 受付開始の合図（強めのバイブ）
-      await HapticFeedback.vibrate(); 
+      // 受付開始の合図（強めのバイブ 5回繰り返して確実に伝える）
+      for (int i = 0; i < 5; i++) {
+        await HapticFeedback.vibrate(); 
+        await Future.delayed(Duration(milliseconds: 100));
+      }
       startContinuousVibration(); // 受付中の継続バイブ開始
       print('📳 バイブレーション開始：受付中');
       
@@ -336,7 +354,19 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       _currentState = AppState.processing;
     });
     
-    await _speech.stop();
+    await _speech.stop();ガイドモード変更は、ホドウ、ハクセン、ホコウ。AI変更は、ジェミニ、クロード、GPT。詳細説明は、ケシキ、セツメイ。テイシ、トマレ。');
+        
+      } else if (cmd.contains('ホドウ') || cmd.contains('歩道')) {
+        setState(() => _currentGuideMode = GuideMode.sidewalk);
+        await _speak('歩道をガイドします');
+        
+      } else if (cmd.contains('ハクセン') || cmd.contains('白線')) {
+        setState(() => _currentGuideMode = GuideMode.whiteLine);
+        await _speak('白線に沿っての歩行をガイドします');
+        
+      } else if (cmd.contains('ホコウ') || cmd.contains('歩行')) {
+        setState(() => _currentGuideMode = GuideMode.general);
+        await _speak('歩行をガイドします
     
     String cmd = command.toLowerCase().trim();
     
@@ -445,13 +475,28 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   }
 
   // Gemini解析
-  Future<String> _analyzeWithGemini(Uint8List bytes, {bool detailedPrompt = false}) async {
-    final apiKey = dotenv.env['GEMINI_API_KEY'];
-    if (apiKey == null) {
-      throw Exception('Gemini APIキーが設定されていません');
+  FuString modeGuide = "";
+    switch (_currentGuideMode) {
+      case GuideMode.sidewalk:
+        modeGuide = "現在は「歩道」を歩いています。歩道に沿った安全な歩行をガイドしてください。";
+        break;
+      case GuideMode.whiteLine:
+        modeGuide = "現在は「白線」の外側（道路端）を歩いています。白線に沿った安全な歩行をガイドしてください。";
+        break;
+      case GuideMode.general:
+        modeGuide = "現在は歩道や白線に沿った一般的な歩行をしています。";
+        break;
     }
 
-    final model = GenerativeModel(
+    if (detailedPrompt) {
+      promptText = '【重要】あなたは視覚障害者の命を預かる歩行介助者です。' +
+          modeGuide + 
+          '前方に見える景色、道の状況、障害物、建物、人、車両、信号機、標識など、' +
+          'すべての重要な情報を具体的に日本語で説明してください。' +
+          '少し検Eも危険の可能性があるものは必ず指摘してください。';
+    } else {
+      promptText = '【緊急重要】あなたは視覚障害者の歩行を支援する介助者AIです。この人の命と安全があなたの判断にかかっています。' +
+          modeGuide
       model: 'gemini-2.5-flash-lite',
       apiKey: apiKey,
     );
@@ -491,7 +536,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
         return '🔴 処理中';
     }
   }
-
+行
   @override
   void dispose() {
     _analysisTimer?.cancel();
