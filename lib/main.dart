@@ -13,8 +13,6 @@ import 'dart:typed_data';
 import 'dart:io';
 import 'dart:convert';
 
-import 'walking_brain.dart';
-
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
@@ -51,6 +49,26 @@ void main() async {
   }
 }
 
+// AIサービスの種類
+enum AIService {
+  gemini,
+  claude,
+  chatgpt,
+}
+
+class AIServiceHelper {
+  static String getDisplayName(AIService service) {
+    switch (service) {
+      case AIService.gemini:
+        return 'Google Gemini';
+      case AIService.claude:
+        return 'Claude (Anthropic)';
+      case AIService.chatgpt:
+        return 'ChatGPT (OpenAI)';
+    }
+  }
+}
+
 // シンプルな状態管理
 enum AppState {
   normal,           // 通常状態（解析中）
@@ -73,12 +91,13 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   Timer? _analysisTimer;
   bool _cameraAvailable = false;
   String _version = 'Loading...';
-  final WalkingBrain _brain = WalkingBrain();
+  AIService _selectedAI = AIService.gemini;
   final stt.SpeechToText _speech = stt.SpeechToText();
   bool _speechAvailable = false;
   AppState _currentState = AppState.normal;
   Uint8List? _lastImage;
-  String? _lastErrorMessage;
+  Timer? _heartbeatTimer; // 心音用タイマー
+  bool _isSpeaking = false; // TTS発話中かどうかのフラグ
 
   @override
   void initState() {
@@ -92,6 +111,40 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     await _loadAIPreference();
     await _initializeSpeech();
     _startAnalysisTimer();
+    _startHeartbeat(); // 心音開始
+  }
+
+  // 心音（常時生存確認音）の開始
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(Duration(seconds: 1), (timer) {
+      _playHeartbeat();
+    });
+    print('💓 心音タイマー開始（1秒間隔）');
+  }
+
+  // 心音の再生
+  Future<void> _playHeartbeat() async {
+    // 以下の場合は心音を鳴らさない：
+    // 1. TTSが案内を発話中
+    // 2. 音声認識（listening）状態
+    // 3. コマンド処理（processing）状態
+    if (_isSpeaking || _currentState != AppState.normal) {
+      return;
+    }
+
+    try {
+      // 非常に小さな音で「。」を再生して「ポン」という微かな音を出す
+      await _tts.setVolume(0.1);
+      await _tts.setPitch(2.0); // 高いピッチで歯切れよく
+      await _tts.speak('。');
+      
+      // 再生後に音量とピッチを元に戻す（案内用）
+      // await _tts.setVolume(1.0);
+      // await _tts.setPitch(1.0);
+    } catch (e) {
+      print('心音再生エラー: $e');
+    }
   }
 
   Future<void> _initializeCamera() async {
@@ -122,10 +175,6 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   }
 
   Future<void> _loadPackageInfo() async {
-    setState(() {
-      _version = 'v0.0.5+21';
-    });
-    /*
     try {
       PackageInfo packageInfo = await PackageInfo.fromPlatform();
       setState(() {
@@ -133,17 +182,16 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       });
     } catch (e) {
       setState(() {
-        _version = 'v1.2.7+15';
+        _version = 'v0.0.6+1';
       });
     }
-    */
   }
 
   Future<void> _loadAIPreference() async {
     final prefs = await SharedPreferences.getInstance();
     final aiIndex = prefs.getInt('selected_ai') ?? 0;
     setState(() {
-      _brain.setAI(AIService.values[aiIndex]);
+      _selectedAI = AIService.values[aiIndex];
     });
   }
 
@@ -151,7 +199,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('selected_ai', service.index);
     setState(() {
-      _brain.setAI(service);
+      _selectedAI = service;
     });
   }
 
@@ -214,18 +262,12 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       final bytes = await image.readAsBytes();
       _lastImage = bytes;
       
-      final result = await _brain.analyzeScene(bytes);
+      String result = await _analyzeWithGemini(bytes);
       
-      if (mounted) {
-        setState(() {
-          _lastErrorMessage = result.error; // エラーメッセージを保存
-        });
-      }
-
       // 通常状態でのみTTS実行
       if (_currentState == AppState.normal) {
-        await _speak(result.message);
-        print('🔊 解析結果: ${result.message}');
+        await _speak(result);
+        print('🔊 解析結果: $result');
       }
       
     } catch (e) {
@@ -241,9 +283,9 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       final bytes = await File(image.path).readAsBytes();
       _lastImage = bytes;
       
-      final result = await _brain.analyzeScene(bytes);
-      await _speak(result.message);
-      print('🔊 画像解析結果: ${result.message}');
+      String result = await _analyzeWithGemini(bytes);
+      await _speak(result);
+      print('🔊 画像解析結果: $result');
       
     } catch (e) {
       print('画像解析エラー: $e');
@@ -311,7 +353,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
         await _speak('使えるコマンドです。AI変更は、ジェミニ、クロード、GPT。詳細説明は、景色、説明。現在のAIは、AI。停止は、とまれ。');
         
       } else if (cmd.contains('ai') || cmd.contains('エーアイ') || cmd.contains('現在のai') || cmd.contains('どのai')) {
-        String currentAI = AIServiceHelper.getDisplayName(_brain.currentAI);
+        String currentAI = AIServiceHelper.getDisplayName(_selectedAI);
         await _speak('現在のAIは、$currentAI です');
         
       } else if (cmd.contains('ジェミニ') || cmd.contains('gemini')) {
@@ -336,12 +378,12 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
           await _speak('詳細に説明します');
           
           // Gemini解析を即座実行（待機時間短縮）
-          print('🔍 Brain詳細解析開始');
-          final result = await _brain.analyzeScene(_lastImage!, detailedPrompt: true);
+          print('🔍 Gemini詳細解析開始');
+          String result = await _analyzeWithGemini(_lastImage!, detailedPrompt: true);
           print('🔍 解析結果取得完了');
           
           // 詳細説明を確実に最後まで発話
-          await _speak(result.message);
+          await _speak(result);
           print('✅ 詳細説明完了');
           
         } else {
@@ -392,8 +434,20 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
 
   // TTS実行（完了まで確実に待機）
   Future<void> _speak(String text) async {
+    if (_isSpeaking) {
+      print('⚠️ TTS発話連発を回避します');
+      return;
+    }
+    
     try {
+      _isSpeaking = true;
       print('🔊 TTS開始: ${text.substring(0, text.length > 30 ? 30 : text.length)}...');
+      
+      // 心音を止める必要はなく、_isSpeaking フラグで _playHeartbeat が回避する
+      
+      // 案内用音声設定（通常の音量・ピッチ）
+      await _tts.setVolume(1.0);
+      await _tts.setPitch(1.0);
       
       await _tts.speak(text);
       
@@ -407,10 +461,47 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       
     } catch (e) {
       print('TTS エラー: $e');
+    } finally {
+      _isSpeaking = false;
     }
   }
 
-  // Gemini解析 (WalkingBrainに移行済みのため削除)
+  // Gemini解析
+  Future<String> _analyzeWithGemini(Uint8List bytes, {bool detailedPrompt = false}) async {
+    final apiKey = dotenv.env['GEMINI_API_KEY'];
+    if (apiKey == null) {
+      throw Exception('Gemini APIキーが設定されていません');
+    }
+
+    final model = GenerativeModel(
+      model: 'gemini-2.5-flash-lite',
+      apiKey: apiKey,
+    );
+
+    String promptText;
+    if (detailedPrompt) {
+      promptText = '【重要】あなたは視覚障害者の命を預かる歩行介助者です。' +
+          '前方に見える景色、道の状況、障害物、建物、人、車両、信号機、標識など、' +
+          'すべての重要な情報を具体的に日本語で説明してください。' +
+          '少しでも危険の可能性があるものは必ず指摘してください。';
+    } else {
+      promptText = '【緊急重要】あなたは視覚障害者の歩行を支援する介助者AIです。この人の命と安全があなたの判断にかかっています。' +
+          '画像を慎重に分析し、以下の基準で判断してください：' +
+          '■「前方OK」は本当に完全に安全な場合のみ使用' +
+          '■少しでも障害物・段差・工事・人・車両・不明物があれば「前方注意」または具体的位置「○時の方向に△△があります」' +
+          '■見えにくい・判断困難な場合は「注意して進んでください」' +
+          '■安全すぎる判断は良いことです。見落としは絶対に避けてください。';
+    }
+
+    final prompt = TextPart(promptText);
+    final imagePart = DataPart('image/jpeg', bytes);
+
+    final response = await model.generateContent([
+      Content.multi([prompt, imagePart])
+    ]);
+
+    return response.text ?? "解析できませんでした";
+  }
 
   String _getStateDisplayName() {
     switch (_currentState) {
@@ -426,6 +517,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   @override
   void dispose() {
     _analysisTimer?.cancel();
+    _heartbeatTimer?.cancel(); // 心音タイマーをキャンセル
     _controller?.dispose();
     _tts.stop();
     super.dispose();
@@ -481,23 +573,9 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'AI: ${AIServiceHelper.getDisplayName(_brain.currentAI)}',
+                        'AI: ${AIServiceHelper.getDisplayName(_selectedAI)}',
                         style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
                       ),
-                      if (_lastErrorMessage != null)
-                        Container(
-                          width: MediaQuery.of(context).size.width * 0.8,
-                          padding: EdgeInsets.symmetric(vertical: 4),
-                          child: Text(
-                            '⚠️ $_lastErrorMessage',
-                            style: TextStyle(
-                              color: Colors.yellow, 
-                              fontSize: 12, 
-                              fontWeight: FontWeight.bold,
-                            ),
-                            softWrap: true,
-                          ),
-                        ),
                       Text(
                         _getStateDisplayName(),
                         style: TextStyle(color: Colors.white, fontSize: 12),
@@ -573,7 +651,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
               return RadioListTile<AIService>(
                 title: Text(AIServiceHelper.getDisplayName(service)),
                 value: service,
-                groupValue: _brain.currentAI,
+                groupValue: _selectedAI,
                 onChanged: (AIService? value) {
                   if (value != null) {
                     _saveAIPreference(value);
