@@ -178,11 +178,11 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     try {
       PackageInfo packageInfo = await PackageInfo.fromPlatform();
       setState(() {
-        _version = 'v${packageInfo.version}+${packageInfo.buildNumber}';
+        _version = 'v${packageInfo.version}+${packageInfo.buildNumber}a';
       });
     } catch (e) {
       setState(() {
-        _version = 'v0.0.6+1';
+        _version = 'v0.0.6+1a';
       });
     }
   }
