@@ -79,6 +79,8 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   AppState _currentState = AppState.normal;
   Uint8List? _lastImage;
   String? _lastErrorMessage;
+  bool _isSpeaking = false; // TTSが発話中かどうか
+  Timer? _heartbeatTimer;    // 生存音用タイマー
 
   @override
   void initState() {
@@ -92,6 +94,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     await _loadAIPreference();
     await _initializeSpeech();
     _startAnalysisTimer();
+    _startHeartbeatTimer(); // 生存音（ハートビート）開始
   }
 
   Future<void> _initializeCamera() async {
@@ -123,7 +126,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
 
   Future<void> _loadPackageInfo() async {
     setState(() {
-      _version = 'v0.0.5+21';
+      _version = 'v0.0.6+1';
     });
     /*
     try {
@@ -163,6 +166,24 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
         _speechAvailable = available;
       });
       
+      // 発話状態のコールバック設定
+      _tts.setStartHandler(() {
+        _isSpeaking = true;
+        print('🔊 TTS発話開始');
+      });
+      _tts.setCompletionHandler(() {
+        _isSpeaking = false;
+        print('🔊 TTS発話完了');
+      });
+      _tts.setCancelHandler(() {
+        _isSpeaking = false;
+        print('🔊 TTS発話キャンセル');
+      });
+      _tts.setErrorHandler((m) {
+        _isSpeaking = false;
+        print('🔊 TTSエラー: $m');
+      });
+
       if (available) {
         print('✅ 音声認識初期化完了');
       } else {
@@ -173,6 +194,33 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       setState(() {
         _speechAvailable = false;
       });
+    }
+  }
+
+  // --- ハートビート（生存監視音） ---
+
+  void _startHeartbeatTimer() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(Duration(seconds: 10), (timer) {
+      _playHeartbeat();
+    });
+    print('💓 ハートビート開始（10秒間隔）');
+  }
+
+  void _stopHeartbeatTimer() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+    print('⏸️ ハートビート停止');
+  }
+
+  Future<void> _playHeartbeat() async {
+    // 解析中（currentStateが通常） かつ 発話中（_isSpeaking）ではない場合のみ
+    if (_currentState == AppState.normal && !_isSpeaking) {
+      print('💓 ハートビート実行：小音で生存確認通知');
+      // ボリュームを下げて、非常に短く発話（または将来的にクリック音）
+      await _tts.setVolume(0.1);
+      await _tts.speak('。'); // 句読点でわずかな「プッ」という音を出す（邪魔にならない生存音）
+      await _tts.setVolume(1.0); // ボリュームを戻す
     }
   }
 
@@ -209,6 +257,9 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     
     print('📸 自動解析実行');
     
+    // 解析開始前にハートビートをオフ（競合防止）
+    _stopHeartbeatTimer();
+    
     try {
       final image = await _controller!.takePicture();
       final bytes = await image.readAsBytes();
@@ -230,6 +281,9 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       
     } catch (e) {
       print('解析エラー: $e');
+    } finally {
+      // 解析終了後にハートビートを再開（エラー時も確実に）
+      _startHeartbeatTimer();
     }
   }
 
