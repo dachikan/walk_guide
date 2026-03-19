@@ -1,4 +1,5 @@
 ﻿import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // HapticFeedback のために追加
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:camera/camera.dart';
@@ -111,39 +112,37 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     await _loadAIPreference();
     await _initializeSpeech();
     _startAnalysisTimer();
-    _startHeartbeat(); // 心音開始
+    _startHeartbeat(); // 心音（バイブレーション）開始
+    
+    // 起動直後の状況説明：カメラ準備OKなら即座に1回解析を実行
+    if (_cameraAvailable) {
+      print('🚀 起動直後の自動解析実行');
+      _analyzeScene();
+    }
   }
 
-  // 心音（常時生存確認音）の開始
+  // 心音（常時生存確認バイブ）の開始
   void _startHeartbeat() {
     _heartbeatTimer?.cancel();
-    _heartbeatTimer = Timer.periodic(Duration(seconds: 1), (timer) {
+    _heartbeatTimer = Timer.periodic(Duration(seconds: 4), (timer) {
       _playHeartbeat();
     });
-    print('💓 心音タイマー開始（1秒間隔）');
+    print('💓 ハートビートタイマー開始（4秒間隔バイブ）');
   }
 
-  // 心音の再生
-  Future<void> _playHeartbeat() async {
-    // 以下の場合は心音を鳴らさない：
-    // 1. TTSが案内を発話中
-    // 2. 音声認識（listening）状態
-    // 3. コマンド処理（processing）状態
+  // ハートビート（バイブレーション）の実行
+  void _playHeartbeat() {
+    // 案内発話中や入力中などはバイブさせない
     if (_isSpeaking || _currentState != AppState.normal) {
       return;
     }
 
     try {
-      // 非常に小さな音で「。」を再生して「ポン」という微かな音を出す
-      await _tts.setVolume(0.1);
-      await _tts.setPitch(2.0); // 高いピッチで歯切れよく
-      await _tts.speak('。');
-      
-      // 再生後に音量とピッチを元に戻す（案内用）
-      // await _tts.setVolume(1.0);
-      // await _tts.setPitch(1.0);
+      // 微弱なバイブレーションで生存確認
+      HapticFeedback.lightImpact();
+      print('📳 ハートビートバイブ実行');
     } catch (e) {
-      print('心音再生エラー: $e');
+      print('バイブレーションエラー: $e');
     }
   }
 
@@ -178,11 +177,11 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     try {
       PackageInfo packageInfo = await PackageInfo.fromPlatform();
       setState(() {
-        _version = 'v${packageInfo.version}+${packageInfo.buildNumber}a';
+        _version = 'v${packageInfo.version}+${packageInfo.buildNumber}';
       });
     } catch (e) {
       setState(() {
-        _version = 'v0.0.6+1a';
+        _version = 'v0.0.7+1'; // バージョン更新
       });
     }
   }
