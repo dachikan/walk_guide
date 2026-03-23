@@ -16,15 +16,15 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
   try {
-    // .env繝輔ぃ繧､繝ｫ繧定ｪｭ縺ｿ霎ｼ繧
+    // .envファイルを読み込む
     await dotenv.load(fileName: ".walking_guide.env");
     
-    // API繧ｭ繝ｼ縺ｮ蟄伜惠遒ｺ隱・
+    // APIキーの存在確認
     if (dotenv.env['GEMINI_API_KEY'] == null) {
       throw Exception('GEMINI_API_Key is not set in .walking_guide.env file');
     }
     
-    // 繧ｫ繝｡繝ｩ縺ｮ蛻晄悄蛹悶ｒ隧ｦ縺ｿ繧・
+    // カメラの初期化を試みる
     CameraDescription? camera;
     try {
       final cameras = await availableCameras();
@@ -41,14 +41,14 @@ void main() async {
     runApp(MaterialApp(
       home: Scaffold(
         body: Center(
-          child: Text('繧｢繝励Μ縺ｮ蛻晄悄蛹悶↓螟ｱ謨励＠縺ｾ縺励◆: $e'),
+          child: Text('アプリの初期化に失敗しました: $e'),
         ),
       ),
     ));
   }
 }
 
-// AI繧ｵ繝ｼ繝薙せ縺ｮ遞ｮ鬘・
+// AIサービスの種類
 enum AIService {
   gemini,
   claude,
@@ -68,17 +68,17 @@ class AIServiceHelper {
   }
 }
 
-// 繧｢繝励Μ縺ｮ迥ｶ諷狗ｮ｡逅・畑enum
+// アプリの状態管理用enum
 enum AppState {
-  normalAnalysis,      // 騾壼ｸｸ縺ｮ閾ｪ蜍戊ｧ｣譫蝉ｸｭ
-  waitingForCommand,   // 蜻ｽ莉､蜿嶺ｻ伜ｾ・■
-  listeningCommand,    // 蜻ｽ莉､蜈･蜉帑ｸｭ
-  executingCommand,    // 蜻ｽ莉､螳溯｡御ｸｭ
-  manualAnalysis,      // 謇句虚隗｣譫蝉ｸｭ
+  normalAnalysis,      // 通常の自動解析中
+  waitingForCommand,   // 命令受付待ち
+  listeningCommand,    // 命令入力中
+  executingCommand,    // 命令実行中
+  manualAnalysis,      // 手動解析中
 }
 
 class WalkingGuideApp extends StatefulWidget {
-  final CameraDescription? camera; // 繧ｫ繝｡繝ｩ繧偵が繝励す繝ｧ繝ｳ縺ｫ縺吶ｋ
+  final CameraDescription? camera; // カメラをオプションにする
   const WalkingGuideApp({super.key, this.camera});
 
   @override
@@ -89,40 +89,42 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   CameraController? _controller;
   final FlutterTts _tts = FlutterTts();
   final ImagePicker _picker = ImagePicker();
-  final WalkingBrain _brain = WalkingBrain(); // 螟ｧ閼ｳ繧ｨ繝ｳ繧ｸ繝ｳ縺ｮ蛻晄悄蛹・
+  final WalkingBrain _brain = WalkingBrain(); // 大脳エンジンの初期化
   Timer? _timer;
   bool _cameraAvailable = false;
   String _version = 'Loading...';
-  // _selectedAI 縺ｯ _brain.currentAI 繧剃ｽｿ逕ｨ縺吶ｋ繧医≧縺ｫ螟画峩
+  // _selectedAI は _brain.currentAI を使用するように変更
   final stt.SpeechToText _speech = stt.SpeechToText();
-  bool _speechAvailable = false; // 髻ｳ螢ｰ隱崎ｭ倥′蛻ｩ逕ｨ蜿ｯ閭ｽ縺九←縺・°
-  AppState _currentState = AppState.normalAnalysis; // 迴ｾ蝨ｨ縺ｮ繧｢繝励Μ迥ｶ諷・
-  Uint8List? _lastCapturedImage; // 逶ｴ蜑阪・逕ｻ蜒上ｒ菫晏ｭ・
-  int _cameraErrorCount = 0; // 繧ｫ繝｡繝ｩ繧ｨ繝ｩ繝ｼ蝗樊焚繧偵き繧ｦ繝ｳ繝・
-  bool _cameraErrorSuppressed = false; // 繧ｫ繝｡繝ｩ繧ｨ繝ｩ繝ｼ謚大宛繝輔Λ繧ｰ
-  String _version = 'v0.0.5+1'; 
+  bool _isListening = false;
+  bool _speechAvailable = false; // 音声認識が利用可能かどうか
+  AppState _currentState = AppState.normalAnalysis; // 現在のアプリ状態
+  Uint8List? _lastCapturedImage; // 直前の画像を保存
+  int _cameraErrorCount = 0; // カメラエラー回数をカウント
+  bool _cameraErrorSuppressed = false; // カメラエラー抑制フラグ
+  String _versionStr = 'v0.0.5+1'; 
+  final AIService _selectedAI = AIService.gemini; // ダミー変数追加
   
-  // 髻ｳ螢ｰ隱崎ｭ倥・譛蠑ｷ菫晁ｭｷ繝｡繧ｽ繝・ラ・育┌蜉ｹ蛹悶ｒ縺ｻ縺ｼ螳悟・諡貞凄・・
+  // 音声認識の最強保護メソッド（無効化をほぼ完全拒否）
   void _setSpeechAvailable(bool available) {
-    // 髻ｳ螢ｰ隱崎ｭ倥ｒ辟｡蜉ｹ縺ｫ縺吶ｋ隕∵ｱゅ・99%諡貞凄・医い繝励Μ邨ゆｺ・凾莉･螟悶・辟｡蜉ｹ蛹悶＠縺ｪ縺・ｼ・
+    // 音声認識を無効にする要求は99%拒否（アプリ終了時以外は無効化しない）
     if (!available) {
-      print('孱・・髻ｳ螢ｰ隱崎ｭ倡┌蜉ｹ蛹冶ｦ∵ｱゅｒ螳悟・諡貞凄 - 髻ｳ螢ｰ隱崎ｭ倥・蟶ｸ譎よ怏蜉ｹ邯ｭ謖・);
-      print('孱・・迴ｾ蝨ｨ迥ｶ諷・ ${_getStateDisplayName(_currentState)} - 辟｡蜉ｹ蛹悶・螳溯｡後＠縺ｾ縺帙ｓ');
-      // 辟｡蜉ｹ蛹冶ｦ∵ｱゅ・螳悟・縺ｫ辟｡隕悶＠縲∝ｼｷ蛻ｶ逧・↓true繧定ｨｭ螳・
+      print('🛡️ 音声認識無効化要求を完全拒否 - 音声認識は常時有効維持');
+      print('🛡️ 現在状態: ${_getStateDisplayName(_currentState)} - 無効化は実行しません');
+      // 無効化要求は完全に無視し、強制的にtrueを設定
       setState(() {
         _speechAvailable = true;
       });
       return;
     }
-    // 譛牙柑蛹冶ｦ∵ｱゅ・縺ｿ蜿励￠蜈･繧・
+    // 有効化要求のみ受け入れ
     setState(() {
       _speechAvailable = available;
     });
-    print('笨・髻ｳ螢ｰ隱崎ｭ俶怏蜉ｹ蛹・ $available (迴ｾ蝨ｨ迥ｶ諷・ ${_getStateDisplayName(_currentState)})');
+    print('✅ 音声認識有効化: $available (現在状態: ${_getStateDisplayName(_currentState)})');
   }
   
-  // 髱樊耳螂ｨ繝輔Λ繧ｰ・亥ｾ梧婿莠呈鋤諤ｧ縺ｮ縺溘ａ菫晄戟・・
-  bool get _isListening => _currentState == AppState.listeningCommand;
+  // 非推奨フラグ（後方互換性のため保持）
+  // bool get _isListening => _currentState == AppState.listeningCommand; // エラー回避のため一旦コメントアウト
   bool get _analysisEnabled => _currentState == AppState.normalAnalysis;
   bool get _strictTtsControl => _currentState != AppState.normalAnalysis;
   bool get _isAnalyzing => _currentState == AppState.manualAnalysis;
@@ -153,8 +155,8 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
         setState(() {
           _cameraAvailable = true;
         });
-        // 謇句虚蛻ｶ蠕｡縺ｮ縺溘ａ閾ｪ蜍輔ち繧､繝槭・髢句ｧ九・辟｡蜉ｹ蛹・
-        print('孱・・謇句虚蛻ｶ蠕｡縺ｮ縺溘ａ蛻晄悄繧ｿ繧､繝槭・髢句ｧ九ｒ辟｡蜉ｹ蛹・- 謇句虚縺ｧ繝懊ち繝ｳ繧呈款縺励※縺上□縺輔＞');
+        // 手動制御のため自動タイマー開始は無効化
+        print('🛡️ 手動制御のため初期タイマー開始を無効化 - 手動でボタンを押してください');
         // _timer = Timer.periodic(Duration(seconds: 5), (timer) => _analyzeScene());
       }
     } catch (e) {
@@ -169,7 +171,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     try {
       PackageInfo packageInfo = await PackageInfo.fromPlatform();
       setState(() {
-        // 繧ゅ＠蜿門ｾ励＠縺溘ヰ繝ｼ繧ｸ繝ｧ繝ｳ縺・0.0.4 莉･蜑阪・蝣ｴ蜷医・縲∝ｼｷ蛻ｶ逧・↓譛譁ｰ繧定｡ｨ遉ｺ
+        // もし取得したバージョンが 0.0.4 以前の場合は、強制的に最新を表示
         if (packageInfo.version.startsWith('0.0.4')) {
           _version = 'v0.0.5+1';
         } else {
@@ -199,315 +201,315 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     });
   }
 
-  // 莠域悄縺励↑縺・浹螢ｰ隱崎ｭ倡ｵゆｺ・・蜃ｦ逅・ｼ育┌蜉ｹ蛹・- 謇句虚蛻ｶ蠕｡縺ｮ縺ｿ・・
+  // 予期しない音声認識終了の処理（無効化 - 手動制御のみ）
   void _handleUnexpectedSpeechEnd() {
-    print('圷 莠域悄縺励↑縺・浹螢ｰ隱崎ｭ倡ｵゆｺ・・蜃ｦ逅・- 謇句虚蛻ｶ蠕｡縺ｮ縺溘ａ菴輔ｂ縺励∪縺帙ｓ');
-    print('邃ｹ・・謇句虚縺ｧ繝懊ち繝ｳ繧呈款縺励※迥ｶ諷九ｒ螟画峩縺励※縺上□縺輔＞');
-    // 謇句虚蛻ｶ蠕｡縺ｮ縺ｿ縺ｮ縺溘ａ縲∬・蜍募ｾｩ蟶ｰ縺ｯ荳蛻・｡後ｏ縺ｪ縺・
+    print('🚨 予期しない音声認識終了の処理 - 手動制御のため何もしません');
+    print('ℹ️ 手動でボタンを押して状態を変更してください');
+    // 手動制御のみのため、自動復帰は一切行わない
   }
   
-  // 髻ｳ螢ｰ隱崎ｭ倥ち繧､繝繧｢繧ｦ繝医ち繧､繝槭・縺ｮ邂｡逅・ｼ育┌蜉ｹ蛹・- 謇句虚蛻ｶ蠕｡縺ｮ縺ｿ・・
+  // 音声認識タイムアウトタイマーの管理（無効化 - 手動制御のみ）
   void _clearSpeechTimeoutTimer() {
-    // 謇句虚蛻ｶ蠕｡縺ｮ縺ｿ縺ｮ縺溘ａ縲√ち繧､繝繧｢繧ｦ繝医ち繧､繝槭・縺ｯ菴ｿ逕ｨ縺励↑縺・
-    print('邃ｹ・・繧ｿ繧､繝繧｢繧ｦ繝医ち繧､繝槭・縺ｯ辟｡蜉ｹ蛹悶＆繧後※縺・∪縺・- 謇句虚蛻ｶ蠕｡縺ｮ縺ｿ');
+    // 手動制御のみのため、タイムアウトタイマーは使用しない
+    print('ℹ️ タイムアウトタイマーは無効化されています - 手動制御のみ');
   }
 
   Future<void> _initializeSpeech() async {
-    print('痔 髻ｳ螢ｰ隱崎ｭ伜・譛溷喧髢句ｧ・..');
+    print('🎤 音声認識初期化開始...');
     try {
-      print('肌 _speech.initialize() 蜻ｼ縺ｳ蜃ｺ縺嶺ｸｭ...');
+      print('🔧 _speech.initialize() 呼び出し中...');
       
       bool available = await _speech.initialize(
         onStatus: (status) {
-          print('投 髻ｳ螢ｰ隱崎ｭ倥せ繝・・繧ｿ繧ｹ螟画峩: $status (迴ｾ蝨ｨ迥ｶ諷・ ${_getStateDisplayName(_currentState)})');
-          print('孱・・謇句虚蛻ｶ蠕｡縺ｮ縺ｿ - 閾ｪ蜍慕憾諷句､画峩縺ｯ螳悟・辟｡蜉ｹ');
-          print('邃ｹ・・謇句虚縺ｧ繝懊ち繝ｳ繧呈款縺励※迥ｶ諷九ｒ蛻ｶ蠕｡縺励※縺上□縺輔＞');
-          // 縺吶∋縺ｦ縺ｮ閾ｪ蜍慕憾諷句､画峩繧堤┌蜉ｹ蛹・
+          print('📊 音声認識ステータス変更: $status (現在状態: ${_getStateDisplayName(_currentState)})');
+          print('🛡️ 手動制御のみ - 自動状態変更は完全無効');
+          print('ℹ️ 手動でボタンを押して状態を制御してください');
+          // すべての自動状態変更を無効化
         },
         onError: (error) {
-          print('笶・髻ｳ螢ｰ隱崎ｭ倥お繝ｩ繝ｼ: ${error.errorMsg}');
-          print('孱・・謇句虚蛻ｶ蠕｡縺ｮ縺ｿ - 繧ｨ繝ｩ繝ｼ譎ゅｂ閾ｪ蜍募ｾｩ蟶ｰ縺ｯ螳悟・辟｡蜉ｹ');
+          print('❌ 音声認識エラー: ${error.errorMsg}');
+          print('🛡️ 手動制御のみ - エラー時も自動復帰は完全無効');
           
-          // 髻ｳ螢ｰ隱崎ｭ倥ｒ蠑ｷ蛻ｶ逧・↓譛牙柑縺ｫ菫昴▽
+          // 音声認識を強制的に有効に保つ
           setState(() {
             _speechAvailable = true;
           });
           
-          print('邃ｹ・・謇句虚縺ｧ繝懊ち繝ｳ繧呈款縺励※迥ｶ諷九ｒ螟画峩縺励※縺上□縺輔＞');
-          // 縺吶∋縺ｦ縺ｮ閾ｪ蜍募ｾｩ蟶ｰ蜃ｦ逅・ｒ辟｡蜉ｹ蛹・
+          print('ℹ️ 手動でボタンを押して状態を変更してください');
+          // すべての自動復帰処理を無効化
         },
       );
       
       _setSpeechAvailable(available);
       
-      print('痔 髻ｳ螢ｰ隱崎ｭ伜・譛溷喧邨先棡: $available');
+      print('🎤 音声認識初期化結果: $available');
       
       if (available) {
-        print('笨・髻ｳ螢ｰ隱崎ｭ倥′蛻晄悄蛹悶＆繧後∪縺励◆');
+        print('✅ 音声認識が初期化されました');
         
-        // 讓ｩ髯舌・遒ｺ隱・
+        // 権限の確認
         bool hasPermission = await _speech.hasPermission;
-        print('柏 髻ｳ螢ｰ隱崎ｭ俶ｨｩ髯・ $hasPermission');
+        print('🔐 音声認識権限: $hasPermission');
         
         if (!hasPermission) {
-          print('笶・髻ｳ螢ｰ隱崎ｭ俶ｨｩ髯舌′縺ゅｊ縺ｾ縺帙ｓ縲り・蜍輔〒繝ｪ繧ｯ繧ｨ繧ｹ繝医＠縺ｾ縺・..');
+          print('❌ 音声認識権限がありません。自動でリクエストします...');
         }
         
-        // 蛻ｩ逕ｨ蜿ｯ閭ｽ縺ｪ險隱槭ｒ遒ｺ隱・
+        // 利用可能な言語を確認
         try {
           var locales = await _speech.locales();
           var japaneseLocale = locales.where((l) => l.localeId.contains('ja')).toList();
-          print('倹 譌･譛ｬ隱槭Ο繧ｱ繝ｼ繝ｫ: ${japaneseLocale.length}蛟玖ｦ九▽縺九ｊ縺ｾ縺励◆');
+          print('🌐 日本語ロケール: ${japaneseLocale.length}個見つかりました');
           for (var locale in japaneseLocale) {
             print('   - ${locale.localeId}: ${locale.name}');
           }
         } catch (e) {
-          print('笞・・繝ｭ繧ｱ繝ｼ繝ｫ諠・ｱ蜿門ｾ怜､ｱ謨・ $e');
+          print('⚠️ ロケール情報取得失敗: $e');
         }
       } else {
-        print('笶・髻ｳ螢ｰ隱崎ｭ倥′蛻ｩ逕ｨ縺ｧ縺阪∪縺帙ｓ - 繝・ヰ繧､繧ｹ縺ｾ縺溘・讓ｩ髯舌・蝠城｡・);
+        print('❌ 音声認識が利用できません - デバイスまたは権限の問題');
       }
       
     } catch (e) {
-      print('笶・髻ｳ螢ｰ隱崎ｭ伜・譛溷喧繧ｨ繝ｩ繝ｼ: $e');
-      print('笶・繧ｨ繝ｩ繝ｼ隧ｳ邏ｰ: ${e.toString()}');
-      // 蛻晄悄蛹悶お繝ｩ繝ｼ縺檎匱逕溘＠縺ｦ繧る浹螢ｰ隱崎ｭ倥・譛牙柑縺ｮ縺ｾ縺ｾ・域怙蠑ｷ菫晁ｭｷ・・
-      print('孱・・蛻晄悄蛹悶お繝ｩ繝ｼ縺檎匱逕溘＠縺ｾ縺励◆縺碁浹螢ｰ隱崎ｭ倥・譛牙柑繧堤ｶｭ謖・);
+      print('❌ 音声認識初期化エラー: $e');
+      print('❌ エラー詳細: ${e.toString()}');
+      // 初期化エラーが発生しても音声認識は有効のまま（最強保護）
+      print('🛡️ 初期化エラーが発生しましたが音声認識は有効を維持');
       setState(() {
-        _speechAvailable = true; // 繧ｨ繝ｩ繝ｼ縺ｧ繧ょｼｷ蛻ｶ逧・↓譛牙柑
+        _speechAvailable = true; // エラーでも強制的に有効
       });
-      print('笨・髻ｳ螢ｰ隱崎ｭ倡憾諷九ｒ蠑ｷ蛻ｶ逧・↓譛牙柑縺ｫ險ｭ螳・);
+      print('✅ 音声認識状態を強制的に有効に設定');
     }
   }
 
   Future<void> _startListening() async {
-    print('識 髻ｳ螢ｰ隱崎ｭ倬幕蟋・ ${_getStateDisplayName(_currentState)}');
+    print('🎯 音声認識開始: ${_getStateDisplayName(_currentState)}');
     
-    // Step 1: 迥ｶ諷九メ繧ｧ繝・け
+    // Step 1: 状態チェック
     if (_currentState != AppState.normalAnalysis) {
-      print('笶・髻ｳ螢ｰ隱崎ｭ俶拠蜷ｦ: 迴ｾ蝨ｨ縺ｮ迥ｶ諷九・${_getStateDisplayName(_currentState)}');
+      print('❌ 音声認識拒否: 現在の状態は${_getStateDisplayName(_currentState)}');
       return;
     }
     
     if (!_speechAvailable) {
-      print('笶・髻ｳ螢ｰ隱崎ｭ伜茜逕ｨ荳榊庄');
-      await _safeTtsSpeak('髻ｳ螢ｰ隱崎ｭ倥′蛻ｩ逕ｨ縺ｧ縺阪∪縺帙ｓ');
+      print('❌ 音声認識利用不可');
+      await _safeTtsSpeak('音声認識が利用できません');
       return;
     }
     
-    // Step 2: 蜻ｽ莉､蜿嶺ｻ伜ｾ・■迥ｶ諷九↓遘ｻ陦鯉ｼ医ち繧､繝槭・螳悟・蛛懈ｭ｢・・
-    print('桃 Step 2: 蜻ｽ莉､蜿嶺ｻ伜ｾ・■迥ｶ諷九↓遘ｻ陦・- 繧ｿ繧､繝槭・螳悟・蛛懈ｭ｢');
+    // Step 2: 命令受付待ち状態に移行（タイマー完全停止）
+    print('📍 Step 2: 命令受付待ち状態に移行 - タイマー完全停止');
     _changeState(AppState.waitingForCommand);
-    _pauseTimer(); // 螳悟・蛛懈ｭ｢
+    _pauseTimer(); // 完全停止
     await _tts.stop();
     await Future.delayed(Duration(milliseconds: 500));
     
-    // Step 3: 邁｡蜊倥↑繝励Ο繝ｳ繝励ヨ逋ｺ隧ｱ
-    print('桃 Step 3: 繝励Ο繝ｳ繝励ヨ逋ｺ隧ｱ');
-    await _tts.speak('縺ｩ縺・◇');
-    await Future.delayed(Duration(seconds: 1)); // 遏ｭ邵ｮ
+    // Step 3: 簡単なプロンプト発話
+    print('📍 Step 3: プロンプト発話');
+    await _tts.speak('どうぞ');
+    await Future.delayed(Duration(seconds: 1)); // 短縮
     await _tts.stop();
     await Future.delayed(Duration(milliseconds: 300));
     
-    // Step 4: 髻ｳ螢ｰ蜈･蜉帷憾諷九↓遘ｻ陦・
-    print('桃 Step 4: 髻ｳ螢ｰ蜈･蜉帷憾諷九↓遘ｻ陦・);
+    // Step 4: 音声入力状態に移行
+    print('📍 Step 4: 音声入力状態に移行');
     _changeState(AppState.listeningCommand);
     
-    // Step 5: 髻ｳ螢ｰ隱崎ｭ倬幕蟋具ｼ医ち繧､繝繧｢繧ｦ繝医↑縺励∵焔蜍募宛蠕｡縺ｮ縺ｿ・・
-    print('桃 Step 5: 髻ｳ螢ｰ隱崎ｭ倬幕蟋・- 繧ｿ繧､繝繧｢繧ｦ繝医↑縺・);
+    // Step 5: 音声認識開始（タイムアウトなし、手動制御のみ）
+    print('📍 Step 5: 音声認識開始 - タイムアウトなし');
     
-    // 繧ｿ繧､繝繧｢繧ｦ繝医ち繧､繝槭・縺ｯ險ｭ螳壹＠縺ｪ縺・ｼ域焔蜍募宛蠕｡縺ｮ縺ｿ・・
-    print('邃ｹ・・繧ｿ繧､繝繧｢繧ｦ繝医↑縺・- 謇句虚縺ｧ繝懊ち繝ｳ繧呈款縺吶∪縺ｧ蜻ｽ莉､蠕・■迥ｶ諷九ｒ邯ｭ謖・);
+    // タイムアウトタイマーは設定しない（手動制御のみ）
+    print('ℹ️ タイムアウトなし - 手動でボタンを押すまで命令待ち状態を維持');
     
     try {
       await _speech.listen(
         onResult: (result) {
-          print('痔 髻ｳ螢ｰ邨先棡: ${result.recognizedWords} (final: ${result.finalResult})');
+          print('🎤 音声結果: ${result.recognizedWords} (final: ${result.finalResult})');
           if (result.finalResult && result.recognizedWords.isNotEmpty) {
-            print('笨・髻ｳ螢ｰ繧ｳ繝槭Φ繝峨ｒ蜿嶺ｿ｡ - 蜃ｦ逅・幕蟋・);
+            print('✅ 音声コマンドを受信 - 処理開始');
             _handleSpeechResult(result.recognizedWords);
           }
         },
         localeId: 'ja-JP',
-        listenFor: Duration(minutes: 60), // 髱槫ｸｸ縺ｫ髟ｷ縺・凾髢楢ｨｭ螳夲ｼ亥ｮ溯ｳｪ辟｡蛻ｶ髯撰ｼ・
-        pauseFor: Duration(seconds: 5), // 辟｡髻ｳ迥ｶ諷九・險ｱ螳ｹ譎る俣繧貞ｻｶ髟ｷ
+        listenFor: Duration(minutes: 60), // 非常に長い時間設定（実質無制限）
+        pauseFor: Duration(seconds: 5), // 無音状態の許容時間を延長
         partialResults: true,
         cancelOnError: false,
       );
       
     } catch (e) {
-      print('笶・髻ｳ螢ｰ隱崎ｭ倥お繝ｩ繝ｼ: $e');
-      print('邃ｹ・・髻ｳ螢ｰ隱崎ｭ倥お繝ｩ繝ｼ縺檎匱逕溘＠縺ｾ縺励◆縺後∝多莉､蠕・■迥ｶ諷九ｒ邯ｭ謖√＠縺ｾ縺・);
-      print('邃ｹ・・謇句虚縺ｧ繝懊ち繝ｳ繧貞・蠎ｦ謚ｼ縺励※縺上□縺輔＞');
-      // 繧ｨ繝ｩ繝ｼ譎ゅｂ蜻ｽ莉､蠕・■迥ｶ諷九ｒ邯ｭ謖・ｼ域焔蜍募宛蠕｡縺ｮ縺ｿ・・
+      print('❌ 音声認識エラー: $e');
+      print('ℹ️ 音声認識エラーが発生しましたが、命令待ち状態を維持します');
+      print('ℹ️ 手動でボタンを再度押してください');
+      // エラー時も命令待ち状態を維持（手動制御のみ）
     }
   }
   
   void _handleSpeechResult(String recognizedWords) {
-    print('桃 Step 6: 髻ｳ螢ｰ邨先棡蜃ｦ逅・- "$recognizedWords"');
+    print('📍 Step 6: 音声結果処理 - "$recognizedWords"');
     
-    // 髻ｳ螢ｰ隱崎ｭ伜●豁｢
+    // 音声認識停止
     try {
       _speech.stop();
     } catch (e) {
-      print('笞・・髻ｳ螢ｰ隱崎ｭ伜●豁｢繧ｨ繝ｩ繝ｼ: $e');
+      print('⚠️ 音声認識停止エラー: $e');
     }
     
     if (recognizedWords.isEmpty || recognizedWords.trim().length < 2) {
-      print('売 髻ｳ螢ｰ蜈･蜉帙↑縺・- 蜻ｽ莉､蠕・■迥ｶ諷九ｒ邯ｭ謖・);
-      print('邃ｹ・・蜀榊ｺｦ繧ｳ繝槭Φ繝峨ｒ隧ｱ縺吶°縲√・繧ｿ繝ｳ繧呈款縺励※縺上□縺輔＞');
-      // 蜻ｽ莉､蠕・■迥ｶ諷九ｒ邯ｭ謖・ｼ域焔蜍募宛蠕｡縺ｮ縺ｿ・・
+      print('🔄 音声入力なし - 命令待ち状態を維持');
+      print('ℹ️ 再度コマンドを話すか、ボタンを押してください');
+      // 命令待ち状態を維持（手動制御のみ）
       _changeState(AppState.waitingForCommand);
       return;
     }
     
-    // Step 7: 蜻ｽ莉､螳溯｡檎憾諷九↓遘ｻ陦・
-    print('桃 Step 7: 蜻ｽ莉､螳溯｡檎憾諷九↓遘ｻ陦・);
+    // Step 7: 命令実行状態に移行
+    print('📍 Step 7: 命令実行状態に移行');
     _changeState(AppState.executingCommand);
     
-    // Step 8: 繧ｳ繝槭Φ繝牙・逅・ｮ溯｡・
-    print('桃 Step 8: 繧ｳ繝槭Φ繝牙・逅・ｮ溯｡・);
+    // Step 8: コマンド処理実行
+    print('📍 Step 8: コマンド処理実行');
     _executeCommand(recognizedWords);
   }
 
   Future<void> _executeCommand(String command) async {
-    print('桃 Step 8-1: 繧ｳ繝槭Φ繝芽ｧ｣譫宣幕蟋・- "$command"');
+    print('📍 Step 8-1: コマンド解析開始 - "$command"');
     
-    // 孱・・繧ｳ繝槭Φ繝牙ｮ溯｡御ｸｭ縺ｯ隗｣譫舌ち繧､繝槭・縺ｮ縺ｿ荳譎ょ●豁｢・亥ｮ悟・蛛懈ｭ｢縺ｧ縺ｯ縺ｪ縺・ｼ・
-    print('孱・・繧ｳ繝槭Φ繝牙ｮ溯｡御ｸｭ・夊ｧ｣譫舌ち繧､繝槭・繧剃ｸ譎ょ●豁｢');
-    _pauseTimer(); // 隗｣譫舌ち繧､繝槭・繧剃ｸ譎ょ●豁｢
+    // 🛡️ コマンド実行中は解析タイマーのみ一時停止（完全停止ではない）
+    print('🛡️ コマンド実行中：解析タイマーを一時停止');
+    _pauseTimer(); // 解析タイマーを一時停止
     
     String cmd = command.toLowerCase().trim();
     
-    // 繝倥Ν繝励さ繝槭Φ繝・
-    if (cmd.contains('繝倥Ν繝・) || cmd.contains('逡･隱・) || cmd.contains('help')) {
-      print('搭 繝倥Ν繝励さ繝槭Φ繝牙ｮ溯｡御ｸｭ');
-      await _tts.speak('菴ｿ縺医ｋ繧ｳ繝槭Φ繝峨〒縺吶・I螟画峩縺ｯ縲√ず繧ｧ繝溘ル縲√け繝ｭ繝ｼ繝峨；PT縲りｩｳ邏ｰ隱ｬ譏弱・縲∵勹濶ｲ縲∬ｪｬ譏弱ょ●豁｢縺ｯ縲√→縺ｾ繧後・);
+    // ヘルプコマンド
+    if (cmd.contains('ヘルプ') || cmd.contains('略語') || cmd.contains('help')) {
+      print('📋 ヘルプコマンド実行中');
+      await _tts.speak('使えるコマンドです。AI変更は、ジェミニ、クロード、GPT。詳細説明は、景色、説明。停止は、とまれ。');
       await Future.delayed(Duration(seconds: 1));
       await _restoreNormalMode();
       return;
     }
     
-    // 蛛懈ｭ｢繧ｳ繝槭Φ繝・
-    if (cmd.contains('蛛懈ｭ｢') || cmd.contains('縺ｨ縺ｾ繧・) || cmd.contains('繧ｹ繝医ャ繝・)) {
-      print('笵・蛛懈ｭ｢繧ｳ繝槭Φ繝牙ｮ溯｡御ｸｭ');
-      await _tts.speak('縺吶∋縺ｦ縺ｮ讖溯・繧貞●豁｢縺励∪縺励◆');
+    // 停止コマンド
+    if (cmd.contains('停止') || cmd.contains('とまれ') || cmd.contains('ストップ')) {
+      print('⛔ 停止コマンド実行中');
+      await _tts.speak('すべての機能を停止しました');
       _pauseTimer();
       _changeState(AppState.normalAnalysis);
       return;
     }
     
-    // AI螟画峩繧ｳ繝槭Φ繝・
-    if (cmd.contains('繧ｸ繧ｧ繝溘ル') || cmd.contains('gemini')) {
-      print('､・AI螟画峩繧ｳ繝槭Φ繝牙ｮ溯｡御ｸｭ・・emini・・);
+    // AI変更コマンド
+    if (cmd.contains('ジェミニ') || cmd.contains('gemini')) {
+      print('🤖 AI変更コマンド実行中（Gemini）');
       await _saveAIPreference(AIService.gemini);
-      await _tts.speak('AI繧偵ず繧ｧ繝溘ル縺ｫ螟画峩縺励∪縺励◆');
+      await _tts.speak('AIをジェミニに変更しました');
       await Future.delayed(Duration(seconds: 1));
       await _restoreNormalMode();
       return;
     }
     
-    if (cmd.contains('繧ｯ繝ｭ繝ｼ繝・) || cmd.contains('claude')) {
-      print('､・AI螟画峩繧ｳ繝槭Φ繝牙ｮ溯｡御ｸｭ・・laude・・);
+    if (cmd.contains('クロード') || cmd.contains('claude')) {
+      print('🤖 AI変更コマンド実行中（Claude）');
       await _saveAIPreference(AIService.claude);
-      await _tts.speak('AI繧偵け繝ｭ繝ｼ繝峨↓螟画峩縺励∪縺励◆');
+      await _tts.speak('AIをクロードに変更しました');
       await Future.delayed(Duration(seconds: 1));
       await _restoreNormalMode();
       return;
     }
     
-    if (cmd.contains('gpt') || cmd.contains('繧ｸ繝ｼ繝斐・繝・ぅ繝ｼ') || cmd.contains('繝√Ε繝・ヨ')) {
-      print('､・AI螟画峩繧ｳ繝槭Φ繝牙ｮ溯｡御ｸｭ・・hatGPT・・);
+    if (cmd.contains('gpt') || cmd.contains('ジーピーティー') || cmd.contains('チャット')) {
+      print('🤖 AI変更コマンド実行中（ChatGPT）');
       await _saveAIPreference(AIService.chatgpt);
-      await _tts.speak('AI繧偵メ繝｣繝・ヨGPT縺ｫ螟画峩縺励∪縺励◆');
+      await _tts.speak('AIをチャットGPTに変更しました');
       await Future.delayed(Duration(seconds: 1));
       await _restoreNormalMode();
       return;
     }
     
-    // 隧ｳ邏ｰ隱ｬ譏弱さ繝槭Φ繝・
-    if (cmd.contains('譎ｯ濶ｲ') || cmd.contains('隱ｬ譏・) || cmd.contains('隧ｳ縺励￥') || cmd.contains('蜑肴婿')) {
-      print('剥 隧ｳ邏ｰ隱ｬ譏弱さ繝槭Φ繝牙ｮ溯｡御ｸｭ');
+    // 詳細説明コマンド
+    if (cmd.contains('景色') || cmd.contains('説明') || cmd.contains('詳しく') || cmd.contains('前方')) {
+      print('🔍 詳細説明コマンド実行中');
       if (_lastCapturedImage != null) {
-        await _tts.speak('隧ｳ邏ｰ縺ｫ隱ｬ譏弱＠縺ｾ縺・);
+        await _tts.speak('詳細に説明します');
         _changeState(AppState.manualAnalysis);
         await _analyzeCapturedImage(_lastCapturedImage!, detailed: true);
       } else {
-        await _tts.speak('蛻・梵縺吶ｋ逕ｻ蜒上′縺ゅｊ縺ｾ縺帙ｓ');
+        await _tts.speak('分析する画像がありません');
       }
       await Future.delayed(Duration(seconds: 1));
       await _restoreNormalMode();
       return;
     }
     
-    // 譛ｪ遏･縺ｮ繧ｳ繝槭Φ繝・
-    print('笶・譛ｪ遏･縺ｮ繧ｳ繝槭Φ繝牙ｮ溯｡御ｸｭ: $cmd');
-    await _tts.speak('繧ｳ繝槭Φ繝峨′逅・ｧ｣縺ｧ縺阪∪縺帙ｓ縺ｧ縺励◆縲ゅ・繝ｫ繝励→險縺・→菴ｿ縺・婿繧定◇縺代∪縺吶・);
+    // 未知のコマンド
+    print('❌ 未知のコマンド実行中: $cmd');
+    await _tts.speak('コマンドが理解できませんでした。ヘルプと言うと使い方を聞けます。');
     await Future.delayed(Duration(seconds: 1));
     await _restoreNormalMode();
   }
 
   Future<void> _analyzeCapturedImage(Uint8List imageBytes, {bool detailed = false}) async {
-    print('ｧ WalkingBrain 隗｣譫宣幕蟋・(隧ｳ邏ｰ繝｢繝ｼ繝・ $detailed)');
+    print('🧠 WalkingBrain 解析開始 (詳細モード: $detailed)');
     try {
       final result = await _brain.analyzeScene(imageBytes, detailed: detailed);
-      print('ｧ WalkingBrain 隗｣譫仙ｮ御ｺ・ ${result.message}');
+      print('🧠 WalkingBrain 解析完了: ${result.message}');
       await _safeTtsSpeak(result.message);
     } catch (e) {
-      print('笶・Brain analysis failed: $e');
-      await _safeTtsSpeak("逕ｻ蜒剰ｧ｣譫舌〒繧ｨ繝ｩ繝ｼ縺檎匱逕溘＠縺ｾ縺励◆縲ゅう繝ｳ繧ｿ繝ｼ繝阪ャ繝域磁邯壹ｒ遒ｺ隱阪＠縺ｦ縺上□縺輔＞縲・);
+      print('❌ Brain analysis failed: $e');
+      await _safeTtsSpeak("画像解析でエラーが発生しました。インターネット接続を確認してください。");
     }
   }
 
   Future<void> _restoreNormalMode() async {
-    print('桃 Step 9: 騾壼ｸｸ繝｢繝ｼ繝峨↓蠕ｩ蟶ｰ髢句ｧ・);
+    print('📍 Step 9: 通常モードに復帰開始');
     
     try {
-      // 髻ｳ螢ｰ隱崎ｭ伜●豁｢
+      // 音声認識停止
       if (_speech.isListening) {
         await _speech.stop();
       }
       
-      // TTS蛛懈ｭ｢
+      // TTS停止
       await _tts.stop();
       await Future.delayed(Duration(milliseconds: 300));
       
-      // 騾壼ｸｸ隗｣譫千憾諷九↓遘ｻ陦・
+      // 通常解析状態に移行
       _changeState(AppState.normalAnalysis);
       
-      // 繧ｿ繧､繝槭・繧貞・髢具ｼ磯壼ｸｸ蜍穂ｽ懷ｾｩ蟶ｰ・・
+      // タイマーを再開（通常動作復帰）
       if (_cameraAvailable && _timer == null) {
         _timer = Timer.periodic(Duration(seconds: 5), (timer) => _analyzeScene());
-        print('売 隗｣譫舌ち繧､繝槭・繧貞・髢九＠縺ｾ縺励◆');
+        print('🔄 解析タイマーを再開しました');
       }
       
-      print('笨・螳御ｺ・ 騾壼ｸｸ繝｢繝ｼ繝峨↓蠕ｩ蟶ｰ縺励∪縺励◆');
+      print('✅ 完了: 通常モードに復帰しました');
       
     } catch (e) {
-      print('笶・騾壼ｸｸ繝｢繝ｼ繝牙ｾｩ蟶ｰ繧ｨ繝ｩ繝ｼ: $e');
+      print('❌ 通常モード復帰エラー: $e');
       _changeState(AppState.normalAnalysis);
     }
   }
   
   Future<void> _stopListening() async {
     if (_currentState == AppState.listeningCommand || _currentState == AppState.waitingForCommand) {
-      print('笵・髻ｳ螢ｰ隱崎ｭ倥ｒ謇句虚縺ｧ蛛懈ｭ｢荳ｭ...');
+      print('⛔ 音声認識を手動で停止中...');
       try {
         await _speech.stop();
       } catch (e) {
-        print('笞・・髻ｳ螢ｰ隱崎ｭ伜●豁｢繧ｨ繝ｩ繝ｼ: $e');
+        print('⚠️ 音声認識停止エラー: $e');
       }
       await _restoreNormalMode();
     }
   }
 
-  // 迥ｶ諷句､画峩繝｡繧ｽ繝・ラ・磯浹螢ｰ隱崎ｭ倡憾諷倶ｿ晁ｭｷ讖溯・莉倥″・・
+  // 状態変更メソッド（音声認識状態保護機能付き）
   void _changeState(AppState newState) {
-    print('売 迥ｶ諷句､画峩: ${_getStateDisplayName(_currentState)} 竊・${_getStateDisplayName(newState)}');
+    print('🔄 状態変更: ${_getStateDisplayName(_currentState)} → ${_getStateDisplayName(newState)}');
     
-    // 蜻ｽ莉､蜿嶺ｻ倅ｸｭ縺ｯ髻ｳ螢ｰ隱崎ｭ倥ｒ蠑ｷ蛻ｶ逧・↓譛牙柑蛹厄ｼ域怙邨ょｮ牙・陬・ｽｮ・・
+    // 命令受付中は音声認識を強制的に有効化（最終安全装置）
     if ((newState == AppState.waitingForCommand || newState == AppState.listeningCommand) && !_speechAvailable) {
-      print('孱・・譛邨ょｮ牙・陬・ｽｮ・壼多莉､蜿嶺ｻ倡憾諷九∈縺ｮ遘ｻ陦梧凾縺ｫ髻ｳ螢ｰ隱崎ｭ倥ｒ蠑ｷ蛻ｶ譛牙柑蛹・);
+      print('🛡️ 最終安全装置：命令受付状態への移行時に音声認識を強制有効化');
       setState(() {
         _speechAvailable = true;
         _currentState = newState;
@@ -522,77 +524,77 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   
   String _getStateDisplayName(AppState state) {
     switch (state) {
-      case AppState.normalAnalysis: return '騾壼ｸｸ隗｣譫蝉ｸｭ';
-      case AppState.waitingForCommand: return '蜻ｽ莉､蜿嶺ｻ伜ｾ・■';
-      case AppState.listeningCommand: return '蜻ｽ莉､蜈･蜉帑ｸｭ';
-      case AppState.executingCommand: return '蜻ｽ莉､螳溯｡御ｸｭ';
-      case AppState.manualAnalysis: return '謇句虚隗｣譫蝉ｸｭ';
+      case AppState.normalAnalysis: return '通常解析中';
+      case AppState.waitingForCommand: return '命令受付待ち';
+      case AppState.listeningCommand: return '命令入力中';
+      case AppState.executingCommand: return '命令実行中';
+      case AppState.manualAnalysis: return '手動解析中';
     }
   }
 
-  // TTS螳溯｡後ｒ螳牙・縺ｫ陦後≧繝倥Ν繝代・繝｡繧ｽ繝・ラ・磯壼ｸｸ隗｣譫蝉ｸｭ縺ｯ蟶ｸ縺ｫ螳溯｡鯉ｼ・
+  // TTS実行を安全に行うヘルパーメソッド（通常解析中は常に実行）
   Future<void> _safeTtsSpeak(String text) async {
-    // 騾壼ｸｸ隗｣譫蝉ｸｭ縺ｯ蟶ｸ縺ｫTTS繧貞ｮ溯｡後・浹螢ｰ隱崎ｭ倅ｸｭ縺ｯ螳溯｡後＠縺ｪ縺・
+    // 通常解析中は常にTTSを実行、音声認識中は実行しない
     if (_currentState == AppState.listeningCommand || 
         _currentState == AppState.waitingForCommand) {
-      print('笵・TTS繝悶Ο繝・け (迥ｶ諷・ ${_getStateDisplayName(_currentState)}): $text');
+      print('⛔ TTSブロック (状態: ${_getStateDisplayName(_currentState)}): $text');
       return;
     }
     try {
-      print('矧 TTS螳溯｡・(迥ｶ諷・ ${_getStateDisplayName(_currentState)}): $text');
+      print('🔊 TTS実行 (状態: ${_getStateDisplayName(_currentState)}): $text');
       await _tts.speak(text);
     } catch (e) {
-      print('TTS繧ｨ繝ｩ繝ｼ: $e');
+      print('TTSエラー: $e');
     }
   }
 
-  // 邱頑･譎ゅ・TTS・亥些髯ｺ迚ｩ讀懷・譎ゅ・縺ｿ菴ｿ逕ｨ・・
+  // 緊急時のTTS（危険物検出時のみ使用）
   Future<void> _emergencyTtsSpeak(String text) async {
-    // 邱頑･譎ゅ・髻ｳ螢ｰ隱崎ｭ倅ｸｭ縺ｧ繧ょｼｷ蛻ｶ逋ｺ隧ｱ
+    // 緊急時は音声認識中でも強制発話
     try {
       await _tts.stop();
       await Future.delayed(const Duration(milliseconds: 500));
-      await _tts.speak('邱頑･: $text');
+      await _tts.speak('緊急: $text');
     } catch (e) {
-      print('邱頑･TTS繧ｨ繝ｩ繝ｼ: $e');
+      print('緊急TTSエラー: $e');
     }
   }
 
-  // 繧ｿ繧､繝槭・縺ｮ蛛懈ｭ｢縺ｨ蜀埼幕
+  // タイマーの停止と再開
   void _pauseTimer() {
     if (_timer != null) {
       _timer!.cancel();
       _timer = null;
-      print('笵・閾ｪ蜍戊ｧ｣譫舌ち繧､繝槭・繧貞ｮ悟・蛛懈ｭ｢縺励∪縺励◆');
+      print('⛔ 自動解析タイマーを完全停止しました');
     }
   }
 
   void _resumeTimer() {
-    // 謇句虚蛻ｶ蠕｡縺ｮ縺ｿ縺ｮ縺溘ａ縲∬・蜍輔ち繧､繝槭・蜀埼幕縺ｯ辟｡蜉ｹ
-    print('孱・・閾ｪ蜍輔ち繧､繝槭・蜀埼幕縺ｯ辟｡蜉ｹ - 謇句虚蛻ｶ蠕｡縺ｮ縺ｿ');
-    print('邃ｹ・・謇句虚縺ｧ繝懊ち繝ｳ繧呈款縺励※騾壼ｸｸ繝｢繝ｼ繝峨↓蠕ｩ蟶ｰ縺励※縺上□縺輔＞');
-    // 縺吶∋縺ｦ縺ｮ閾ｪ蜍輔ち繧､繝槭・繧堤┌蜉ｹ蛹・
+    // 手動制御のみのため、自動タイマー再開は無効
+    print('🛡️ 自動タイマー再開は無効 - 手動制御のみ');
+    print('ℹ️ 手動でボタンを押して通常モードに復帰してください');
+    // すべての自動タイマーを無効化
   }
 
   Future<void> _analyzeScene() async {
-    // 騾壼ｸｸ隗｣譫千憾諷九〒縺ｮ縺ｿ螳溯｡・
+    // 通常解析状態でのみ実行
     if (_currentState != AppState.normalAnalysis) {
-      print('笵・隗｣譫舌せ繧ｭ繝・・: 迴ｾ蝨ｨ縺ｮ迥ｶ諷九・${_getStateDisplayName(_currentState)}');
+      print('⛔ 解析スキップ: 現在の状態は${_getStateDisplayName(_currentState)}');
       return;
     }
     
-    // 繧ｫ繝｡繝ｩ繧ｨ繝ｩ繝ｼ謚大宛荳ｭ縺ｯ隗｣譫舌ｒ繧ｹ繧ｭ繝・・
+    // カメラエラー抑制中は解析をスキップ
     if (_cameraErrorSuppressed) {
-      print('笵・隗｣譫舌せ繧ｭ繝・・: 繧ｫ繝｡繝ｩ繧ｨ繝ｩ繝ｼ謚大宛荳ｭ');
+      print('⛔ 解析スキップ: カメラエラー抑制中');
       return;
     }
     
     if (!_cameraAvailable || _controller == null || !_controller!.value.isInitialized) {
-      print('笵・隗｣譫舌せ繧ｭ繝・・: 繧ｫ繝｡繝ｩ譛ｪ蛻晄悄蛹・);
+      print('⛔ 解析スキップ: カメラ未初期化');
       return;
     }
     
-    print('胴 閾ｪ蜍慕判蜒剰ｧ｣譫舌ｒ髢句ｧ・);
+    print('📷 自動画像解析を開始');
     
     await _captureAndAnalyze(() async {
       try {
@@ -619,10 +621,10 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       final bytes = await getImageBytes();
       _lastCapturedImage = bytes;
       
-      // 繧ｫ繝｡繝ｩ隗｣譫舌′謌仙粥縺励◆蝣ｴ蜷医√お繝ｩ繝ｼ繧ｫ繧ｦ繝ｳ繝医ｒ繝ｪ繧ｻ繝・ヨ
+      // カメラ解析が成功した場合、エラーカウントをリセット
       if (_cameraErrorCount > 0) {
         _cameraErrorCount = 0;
-        print('笨・繧ｫ繝｡繝ｩ繧ｨ繝ｩ繝ｼ繧ｫ繧ｦ繝ｳ繝医Μ繧ｻ繝・ヨ - 豁｣蟶ｸ蠕ｩ譌ｧ');
+        print('✅ カメラエラーカウントリセット - 正常復旧');
       }
 
       await _analyzeCapturedImage(bytes);
@@ -630,15 +632,15 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     } catch (e) {
       print('Capture or analyze failed: $e');
       
-      // 繧ｫ繝｡繝ｩ繧ｨ繝ｩ繝ｼ縺ｮ蝣ｴ蜷医・繧ｨ繝ｩ繝ｼ蝗樊焚繧偵き繧ｦ繝ｳ繝・
+      // カメラエラーの場合はエラー回数をカウント
       if (e.toString().contains('CameraException') || e.toString().contains('ImageCaptureException')) {
         _cameraErrorCount++;
-        print('萄 繧ｫ繝｡繝ｩ繧ｨ繝ｩ繝ｼ蝗樊焚: $_cameraErrorCount');
+        print('📸 カメラエラー回数: $_cameraErrorCount');
         
-        // 3蝗樣｣邯壹〒繧ｨ繝ｩ繝ｼ縺檎匱逕溘＠縺溷ｴ蜷医・蜃ｦ逅・ｼ域焔蜍募宛蠕｡縺ｮ縺ｿ・・
+        // 3回連続でエラーが発生した場合の処理（手動制御のみ）
         if (_cameraErrorCount >= 3 && !_cameraErrorSuppressed) {
           _cameraErrorSuppressed = true;
-          print('笞・・繧ｫ繝｡繝ｩ繧ｨ繝ｩ繝ｼ縺・蝗樣｣邯夂匱逕・- 閾ｪ蜍戊ｧ｣譫舌ｒ荳譎ょ●豁｢縺励∪縺・);
+          print('⚠️ カメラエラーが3回連続発生 - 自動解析を一時停止します');
           _pauseTimer();
         }
       }
@@ -647,7 +649,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
 
   @override
   void dispose() {
-    _timer?.cancel(); // 繧ｿ繧､繝槭・繧偵く繝｣繝ｳ繧ｻ繝ｫ
+    _timer?.cancel(); // タイマーをキャンセル
     _controller?.dispose();
     _tts.stop(); 
     super.dispose();
@@ -659,7 +661,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       appBar: AppBar(
         title: Row(
           children: [
-            Text('豁ｩ驕捺｡亥・'),
+            Text('歩道案内'),
             Spacer(),
             Text(
               _version,
@@ -679,11 +681,11 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       body: _cameraAvailable && _controller != null && _controller!.value.isInitialized 
         ? Stack(
             children: [
-              // 繧ｫ繝｡繝ｩ逕ｻ髱｢繧貞・逕ｻ髱｢縺ｫ諡｡蠑ｵ
+              // カメラ画面を全画面に拡張
               Positioned.fill(
                 child: CameraPreview(_controller!),
               ),
-              // 蟾ｦ荳翫↓AI諠・ｱ繧定｡ｨ遉ｺ
+              // 左上にAI情報を表示
               Positioned(
                 top: 16,
                 left: 16,
@@ -704,15 +706,15 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                         () {
                           switch (_currentState) {
                             case AppState.normalAnalysis:
-                              return '萄 騾壼ｸｸ隗｣譫蝉ｸｭ (5s髢馴囈)';
+                              return '📸 通常解析中 (5s間隔)';
                             case AppState.waitingForCommand:
-                              return '竢ｳ 蜻ｽ莉､蜿嶺ｻ伜ｾ・■';
+                              return '⏳ 命令受付待ち';
                             case AppState.listeningCommand:
-                              return '痔 蜻ｽ莉､蜈･蜉帑ｸｭ (蜈ｨ讖溯・蛛懈ｭ｢)';
+                              return '🎤 命令入力中 (全機能停止)';
                             case AppState.executingCommand:
-                              return '笞呻ｸ・蜻ｽ莉､螳溯｡御ｸｭ';
+                              return '⚙️ 命令実行中';
                             case AppState.manualAnalysis:
-                              return '剥 謇句虚隗｣譫蝉ｸｭ';
+                              return '🔍 手動解析中';
                           }
                         }(),
                         style: TextStyle(
@@ -737,7 +739,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                   ),
                 ),
               ),
-              // 蜿ｳ荳九↓蜻ｽ莉､蜿嶺ｻ倥・繧ｿ繝ｳ
+              // 右下に命令受付ボタン
               Positioned(
                 bottom: 16,
                 right: 16,
@@ -748,42 +750,42 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                   foregroundColor: Colors.white,
                   child: Icon((_isListening || _currentState == AppState.waitingForCommand) ? Icons.mic : Icons.mic_none),
                   onPressed: () {
-                    print('痔 髻ｳ螢ｰ繝懊ち繝ｳ縺梧款縺輔ｌ縺ｾ縺励◆');
-                    print('投 迴ｾ蝨ｨ縺ｮ繧｢繝励Μ迥ｶ諷・ ${_getStateDisplayName(_currentState)}');
-                    print('痔 髻ｳ螢ｰ隱崎ｭ伜茜逕ｨ蜿ｯ閭ｽ: $_speechAvailable');
-                    print('閥 迴ｾ蝨ｨ髻ｳ螢ｰ隱崎ｭ倅ｸｭ: $_isListening');
+                    print('🎤 音声ボタンが押されました');
+                    print('📊 現在のアプリ状態: ${_getStateDisplayName(_currentState)}');
+                    print('🎤 音声認識利用可能: $_speechAvailable');
+                    print('🔴 現在音声認識中: $_isListening');
                     
-                    // 蜻ｽ莉､蜿嶺ｻ倅ｸｭ縺ｯ髻ｳ螢ｰ隱崎ｭ俶怏蜉ｹ縺ｨ縺励※謇ｱ縺・ｼ亥ｮ牙・陬・ｽｮ・・
+                    // 命令受付中は音声認識有効として扱う（安全装置）
                     bool effectiveSpeechAvailable = _speechAvailable || 
                         _currentState == AppState.waitingForCommand || 
                         _currentState == AppState.listeningCommand;
                     
                     if (effectiveSpeechAvailable) {
                       if (_isListening || _currentState == AppState.waitingForCommand) {
-                        print('売 蜻ｽ莉､蜿嶺ｻ伜●豁｢蜃ｦ逅・幕蟋・);
+                        print('🔄 命令受付停止処理開始');
                         _stopListening();
                       } else {
-                        print('笆ｶ・・髻ｳ螢ｰ隱崎ｭ倬幕蟋句・逅・幕蟋・);
+                        print('▶️ 音声認識開始処理開始');
                         _startListening();
                       }
                     } else {
-                      print('笞・・髻ｳ螢ｰ隱崎ｭ倡憾諷狗｢ｺ隱・- 蠑ｷ蛻ｶ逧・↓譛牙柑蛹悶＠縺ｦ邯咏ｶ・);
-                      // 髻ｳ螢ｰ隱崎ｭ倥ｒ蠑ｷ蛻ｶ逧・↓譛牙柑蛹・
+                      print('⚠️ 音声認識状態確認 - 強制的に有効化して継続');
+                      // 音声認識を強制的に有効化
                       setState(() {
                         _speechAvailable = true;
                       });
-                      print('紙 謇句虚縺ｧ騾壼ｸｸ繝｢繝ｼ繝峨↓蠕ｩ蟶ｰ縺励∪縺・);
+                      print('🎆 手動で通常モードに復帰します');
                       _changeState(AppState.normalAnalysis);
-                      // 繧ｿ繧､繝槭・縺ｮ謇句虚蜀埼幕・亥ｿｫ騾溘い繧ｯ繧ｻ繧ｹ縺ｮ縺溘ａ・・
+                      // タイマーの手動再開（快速アクセスのため）
                       if (_cameraAvailable) {
                         _timer = Timer.periodic(Duration(seconds: 5), (timer) => _analyzeScene());
-                        print('笨・謇句虚縺ｧ繧ｿ繧､繝槭・繧貞・髢九＠縺ｾ縺励◆');
+                        print('✅ 手動でタイマーを再開しました');
                       }
                     }
                   },
                 ),
               ),
-              // 髻ｳ螢ｰ隱崎ｭ倥・迥ｶ諷九う繝ｳ繧ｸ繧ｱ繝ｼ繧ｿ繝ｼ
+              // 音声認識の状態インジケーター
               if (_isListening)
                 Positioned(
                   bottom: 90,
@@ -795,12 +797,12 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
-                      '閨槭＞縺ｦ縺・∪縺・..',
+                      '聞いています...',
                       style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
                     ),
                   ),
                 ),
-              // 蜻ｽ莉､蜿嶺ｻ伜ｾ・■迥ｶ諷九・繧､繝ｳ繧ｸ繧ｱ繝ｼ繧ｿ繝ｼ
+              // 命令受付待ち状態のインジケーター
               if (_currentState == AppState.waitingForCommand)
                 Positioned(
                   bottom: 90,
@@ -812,7 +814,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
-                      '蜻ｽ莉､蠕・■荳ｭ...',
+                      '命令待ち中...',
                       style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
                     ),
                   ),
@@ -826,12 +828,12 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                 Icon(Icons.camera_alt, size: 100, color: Colors.grey),
                 SizedBox(height: 20),
                 Text(
-                  '繧ｫ繝｡繝ｩ縺悟茜逕ｨ縺ｧ縺阪∪縺帙ｓ',
+                  'カメラが利用できません',
                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                 ),
                 SizedBox(height: 10),
                 Text(
-                  '逕ｻ蜒上ｒ驕ｸ謚槭＠縺ｦ隗｣譫舌ｒ繝・せ繝医〒縺阪∪縺・,
+                  '画像を選択して解析をテストできます',
                   style: TextStyle(fontSize: 16),
                   textAlign: TextAlign.center,
                 ),
@@ -849,7 +851,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                 ElevatedButton.icon(
                   onPressed: _analyzePickedImage,
                   icon: Icon(Icons.photo_library),
-                  label: Text('逕ｻ蜒上ｒ驕ｸ謚槭＠縺ｦ隗｣譫・),
+                  label: Text('画像を選択して解析'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.blue[700],
                     foregroundColor: Colors.white,
@@ -867,7 +869,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: Text('AI繧ｵ繝ｼ繝薙せ繧帝∈謚・),
+          title: Text('AIサービスを選択'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: AIService.values.map((service) {
@@ -888,7 +890,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: Text('繧ｭ繝｣繝ｳ繧ｻ繝ｫ'),
+              child: Text('キャンセル'),
             ),
           ],
         );
@@ -899,18 +901,18 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   String _getAIDescription(AIService service) {
     switch (service) {
       case AIService.gemini:
-        return '讓呎ｺ悶・鬮倬溘・辟｡譁呎椢謨ｰ縺悟､壹＞';
+        return '標準・高速・無料枚数が多い';
       case AIService.claude:
-        return '鬮伜刀雉ｪ繝ｻ譌･譛ｬ隱槭′蠕玲э';
+        return '高品質・日本語が得意';
       case AIService.chatgpt:
-        return '螳牙ｮ壽ｧ鬮倥・螳溽ｸｾ雎雁ｯ・;
+        return '安定性高・実績豊富';
     }
   }
 }
-    _timer?.cancel(); // 繧ｿ繧､繝槭・繧偵く繝｣繝ｳ繧ｻ繝ｫ
-    // _speechTimeoutTimer 縺ｯ謇句虚蛻ｶ蠕｡縺ｮ縺溘ａ菴ｿ逕ｨ縺励↑縺・
+    _timer?.cancel(); // タイマーをキャンセル
+    // _speechTimeoutTimer は手動制御のため使用しない
     _controller?.dispose();
-    _tts.stop(); // TTS繧貞●豁｢
+    _tts.stop(); // TTSを停止
     super.dispose();
   }
 
@@ -921,7 +923,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       appBar: AppBar(
         title: Row(
           children: [
-            Text('豁ｩ驕捺｡亥・'),
+            Text('歩道案内'),
             Spacer(),
             Text(
               _version,
@@ -941,11 +943,11 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       body: _cameraAvailable && _controller != null && _controller!.value.isInitialized 
         ? Stack(
             children: [
-              // 繧ｫ繝｡繝ｩ逕ｻ髱｢繧貞・逕ｻ髱｢縺ｫ諡｡蠑ｵ
+              // カメラ画面を全画面に拡張
               Positioned.fill(
                 child: CameraPreview(_controller!),
               ),
-              // 蟾ｦ荳翫↓AI諠・ｱ繧定｡ｨ遉ｺ
+              // 左上にAI情報を表示
               Positioned(
                 top: 16,
                 left: 16,
@@ -966,15 +968,15 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                         () {
                           switch (_currentState) {
                             case AppState.normalAnalysis:
-                              return '萄 騾壼ｸｸ隗｣譫蝉ｸｭ (5s髢馴囈)';
+                              return '📸 通常解析中 (5s間隔)';
                             case AppState.waitingForCommand:
-                              return '竢ｳ 蜻ｽ莉､蜿嶺ｻ伜ｾ・■';
+                              return '⏳ 命令受付待ち';
                             case AppState.listeningCommand:
-                              return '痔 蜻ｽ莉､蜈･蜉帑ｸｭ (蜈ｨ讖溯・蛛懈ｭ｢)';
+                              return '🎤 命令入力中 (全機能停止)';
                             case AppState.executingCommand:
-                              return '笞呻ｸ・蜻ｽ莉､螳溯｡御ｸｭ';
+                              return '⚙️ 命令実行中';
                             case AppState.manualAnalysis:
-                              return '剥 謇句虚隗｣譫蝉ｸｭ';
+                              return '🔍 手動解析中';
                           }
                         }(),
                         style: TextStyle(
@@ -999,7 +1001,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                   ),
                 ),
               ),
-              // 蜿ｳ荳九↓蜻ｽ莉､蜿嶺ｻ倥・繧ｿ繝ｳ
+              // 右下に命令受付ボタン
               Positioned(
                 bottom: 16,
                 right: 16,
@@ -1010,42 +1012,42 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                   foregroundColor: Colors.white,
                   child: Icon((_isListening || _currentState == AppState.waitingForCommand) ? Icons.mic : Icons.mic_none),
                   onPressed: () {
-                    print('痔 髻ｳ螢ｰ繝懊ち繝ｳ縺梧款縺輔ｌ縺ｾ縺励◆');
-                    print('投 迴ｾ蝨ｨ縺ｮ繧｢繝励Μ迥ｶ諷・ ${_getStateDisplayName(_currentState)}');
-                    print('痔 髻ｳ螢ｰ隱崎ｭ伜茜逕ｨ蜿ｯ閭ｽ: $_speechAvailable');
-                    print('閥 迴ｾ蝨ｨ髻ｳ螢ｰ隱崎ｭ倅ｸｭ: $_isListening');
+                    print('🎤 音声ボタンが押されました');
+                    print('📊 現在のアプリ状態: ${_getStateDisplayName(_currentState)}');
+                    print('🎤 音声認識利用可能: $_speechAvailable');
+                    print('🔴 現在音声認識中: $_isListening');
                     
-                    // 蜻ｽ莉､蜿嶺ｻ倅ｸｭ縺ｯ髻ｳ螢ｰ隱崎ｭ俶怏蜉ｹ縺ｨ縺励※謇ｱ縺・ｼ亥ｮ牙・陬・ｽｮ・・
+                    // 命令受付中は音声認識有効として扱う（安全装置）
                     bool effectiveSpeechAvailable = _speechAvailable || 
                         _currentState == AppState.waitingForCommand || 
                         _currentState == AppState.listeningCommand;
                     
                     if (effectiveSpeechAvailable) {
                       if (_isListening || _currentState == AppState.waitingForCommand) {
-                        print('売 蜻ｽ莉､蜿嶺ｻ伜●豁｢蜃ｦ逅・幕蟋・);
+                        print('🔄 命令受付停止処理開始');
                         _stopListening();
                       } else {
-                        print('笆ｶ・・髻ｳ螢ｰ隱崎ｭ倬幕蟋句・逅・幕蟋・);
+                        print('▶️ 音声認識開始処理開始');
                         _startListening();
                       }
                     } else {
-                      print('笞・・髻ｳ螢ｰ隱崎ｭ倡憾諷狗｢ｺ隱・- 蠑ｷ蛻ｶ逧・↓譛牙柑蛹悶＠縺ｦ邯咏ｶ・);
-                      // 髻ｳ螢ｰ隱崎ｭ倥ｒ蠑ｷ蛻ｶ逧・↓譛牙柑蛹・
+                      print('⚠️ 音声認識状態確認 - 強制的に有効化して継続');
+                      // 音声認識を強制的に有効化
                       setState(() {
                         _speechAvailable = true;
                       });
-                      print('紙 謇句虚縺ｧ騾壼ｸｸ繝｢繝ｼ繝峨↓蠕ｩ蟶ｰ縺励∪縺・);
+                      print('🎆 手動で通常モードに復帰します');
                       _changeState(AppState.normalAnalysis);
-                      // 繧ｿ繧､繝槭・縺ｮ謇句虚蜀埼幕・亥ｿｫ騾溘い繧ｯ繧ｻ繧ｹ縺ｮ縺溘ａ・・
+                      // タイマーの手動再開（快速アクセスのため）
                       if (_cameraAvailable) {
                         _timer = Timer.periodic(Duration(seconds: 5), (timer) => _analyzeScene());
-                        print('笨・謇句虚縺ｧ繧ｿ繧､繝槭・繧貞・髢九＠縺ｾ縺励◆');
+                        print('✅ 手動でタイマーを再開しました');
                       }
                     }
                   },
                 ),
               ),
-              // 髻ｳ螢ｰ隱崎ｭ倥・迥ｶ諷九う繝ｳ繧ｸ繧ｱ繝ｼ繧ｿ繝ｼ
+              // 音声認識の状態インジケーター
               if (_isListening)
                 Positioned(
                   bottom: 90,
@@ -1057,12 +1059,12 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
-                      '閨槭＞縺ｦ縺・∪縺・..',
+                      '聞いています...',
                       style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
                     ),
                   ),
                 ),
-              // 蜻ｽ莉､蜿嶺ｻ伜ｾ・■迥ｶ諷九・繧､繝ｳ繧ｸ繧ｱ繝ｼ繧ｿ繝ｼ
+              // 命令受付待ち状態のインジケーター
               if (_currentState == AppState.waitingForCommand)
                 Positioned(
                   bottom: 90,
@@ -1074,13 +1076,13 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
-                      '蜻ｽ莉､蠕・■荳ｭ...',
+                      '命令待ち中...',
                       style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
                     ),
                   ),
                 ),
-              // 縲碁浹螢ｰ隱崎ｭ倡┌蜉ｹ縲崎｡ｨ遉ｺ繧貞ｮ悟・縺ｫ蜑企勁・域怏螳ｳ縺ｪ陦ｨ遉ｺ縺ｮ縺溘ａ豌ｸ荵・↓蜑企勁・・
-              // 縺薙・陦ｨ遉ｺ縺ｯ蜑企勁縺輔ｌ縺ｾ縺励◆ - 髻ｳ螢ｰ隱崎ｭ倥・蟶ｸ譎よ怏蜉ｹ縺ｨ縺励※謇ｱ縺・∪縺・
+              // 「音声認識無効」表示を完全に削除（有害な表示のため永久に削除）
+              // この表示は削除されました - 音声認識は常時有効として扱います
             ],
           )
         : Center(
@@ -1090,12 +1092,12 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                 Icon(Icons.camera_alt, size: 100, color: Colors.grey),
                 SizedBox(height: 20),
                 Text(
-                  '繧ｫ繝｡繝ｩ縺悟茜逕ｨ縺ｧ縺阪∪縺帙ｓ',
+                  'カメラが利用できません',
                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                 ),
                 SizedBox(height: 10),
                 Text(
-                  '逕ｻ蜒上ｒ驕ｸ謚槭＠縺ｦ隗｣譫舌ｒ繝・せ繝医〒縺阪∪縺・,
+                  '画像を選択して解析をテストできます',
                   style: TextStyle(fontSize: 16),
                   textAlign: TextAlign.center,
                 ),
@@ -1113,7 +1115,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                 ElevatedButton.icon(
                   onPressed: _analyzePickedImage,
                   icon: Icon(Icons.photo_library),
-                  label: Text('逕ｻ蜒上ｒ驕ｸ謚槭＠縺ｦ隗｣譫・),
+                  label: Text('画像を選択して解析'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.blue[700],
                     foregroundColor: Colors.white,
@@ -1131,7 +1133,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: Text('AI繧ｵ繝ｼ繝薙せ繧帝∈謚・),
+          title: Text('AIサービスを選択'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: AIService.values.map((service) {
@@ -1152,7 +1154,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: Text('繧ｭ繝｣繝ｳ繧ｻ繝ｫ'),
+              child: Text('キャンセル'),
             ),
           ],
         );
@@ -1163,11 +1165,11 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   String _getAIDescription(AIService service) {
     switch (service) {
       case AIService.gemini:
-        return '讓呎ｺ悶・鬮倬溘・辟｡譁呎椢謨ｰ縺悟､壹＞';
+        return '標準・高速・無料枚数が多い';
       case AIService.claude:
-        return '鬮伜刀雉ｪ繝ｻ譌･譛ｬ隱槭′蠕玲э';
+        return '高品質・日本語が得意';
       case AIService.chatgpt:
-        return '螳牙ｮ壽ｧ鬮倥・螳溽ｸｾ雎雁ｯ・;
+        return '安定性高・実績豊富';
     }
   }
 }
