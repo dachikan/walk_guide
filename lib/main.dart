@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // HapticFeedback のために追加
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
@@ -7,12 +7,10 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:image_picker/image_picker.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'dart:typed_data';
 import 'dart:io';
-import 'dart:convert';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -99,6 +97,9 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   Uint8List? _lastImage;
   Timer? _heartbeatTimer; // 心音用タイマー
   bool _isSpeaking = false; // TTS発話中かどうかのフラグ
+  bool _isExecutingCommand = false; // コマンド処理の再入防止
+  /// 「どうぞ」発話完了後、STT開始までの追加待ち（ms）。機種差調整用（SharedPreferences）
+  int _sttDelayAfterCueMs = 250;
 
   @override
   void initState() {
@@ -110,6 +111,8 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     await _initializeCamera();
     await _loadPackageInfo();
     await _loadAIPreference();
+    await _loadVoicePrefs();
+    await _configureTts();
     await _initializeSpeech();
     _startAnalysisTimer();
     _startHeartbeat(); // 心音（バイブレーション）開始
@@ -131,18 +134,54 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   }
 
   // ハートビート（バイブレーション）の実行
+  // 通常解析中（normal）かつ案内発話中でないときだけ「強め」。コマンド系は従来どおり軽い vibrate。
   void _playHeartbeat() {
-    // 案内発話中や入力中などはバイブさせない
-    if (_isSpeaking || _currentState != AppState.normal) {
-      return;
-    }
-
+    if (!mounted) return;
     try {
-      // 微弱なバイブレーションで生存確認
-      HapticFeedback.lightImpact();
-      print('📳 ハートビートバイブ実行');
+      if (_currentState == AppState.normal && !_isSpeaking) {
+        HapticFeedback.heavyImpact();
+        Future<void>.delayed(const Duration(milliseconds: 120), () {
+          if (!mounted) return;
+          if (_currentState == AppState.normal && !_isSpeaking) {
+            HapticFeedback.mediumImpact();
+          }
+        });
+        print('📳 ハートビート（通常解析・強め）');
+      } else if (_currentState == AppState.listening ||
+          _currentState == AppState.processing) {
+        HapticFeedback.vibrate();
+        print('📳 ハートビート（コマンド系・従来）');
+      }
     } catch (e) {
       print('バイブレーションエラー: $e');
+    }
+  }
+
+  /// TTS の発話完了を await できるようにする（「どうぞ」直後のSTT開始を早める）
+  Future<void> _configureTts() async {
+    try {
+      await _tts.awaitSpeakCompletion(true);
+      print('✅ TTS awaitSpeakCompletion 有効');
+    } catch (e) {
+      print('TTS 設定エラー: $e');
+    }
+  }
+
+  Future<void> _loadVoicePrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _sttDelayAfterCueMs = (prefs.getInt('stt_delay_after_cue_ms') ?? 250).clamp(0, 2000);
+    });
+  }
+
+  Future<void> _saveSttDelayAfterCueMs(int ms) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('stt_delay_after_cue_ms', ms);
+    if (mounted) {
+      setState(() {
+        _sttDelayAfterCueMs = ms;
+      });
     }
   }
 
@@ -181,7 +220,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       });
     } catch (e) {
       setState(() {
-        _version = 'v0.0.7+1'; // バージョン更新
+        _version = 'v0.0.7+3'; // バージョン v0.0.7+3 に更新
       });
     }
   }
@@ -226,12 +265,12 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   // 解析タイマー開始
   void _startAnalysisTimer() {
     if (_cameraAvailable) {
-      _analysisTimer = Timer.periodic(Duration(seconds: 5), (timer) {
+      _analysisTimer = Timer.periodic(Duration(seconds: 10), (timer) {
         if (_currentState == AppState.normal) {
           _analyzeScene();
         }
       });
-      print('⏰ 解析タイマー開始（5秒間隔）');
+      print('⏰ 解析タイマー開始（10秒間隔）');
     }
   }
 
@@ -259,10 +298,14 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     try {
       final image = await _controller!.takePicture();
       final bytes = await image.readAsBytes();
+      // 撮影中に音声待機へ切り替えた場合は解析を中止
+      if (_currentState != AppState.normal) return;
+
       _lastImage = bytes;
       
       String result = await _analyzeWithGemini(bytes);
-      
+      if (_currentState != AppState.normal) return;
+
       // 通常状態でのみTTS実行
       if (_currentState == AppState.normal) {
         await _speak(result);
@@ -298,6 +341,13 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       await _speak('音声認識が利用できません');
       return;
     }
+
+    // 自動解析の案内TTS中にタップした場合、従来は _isSpeaking のまま「どうぞ」がスキップされ、
+    // バックグラウンドの推定待ちが終わるまでコマンド待機が始まらない。案内を即中断する。
+    try {
+      await _tts.stop();
+    } catch (_) {}
+    _isSpeaking = false;
     
     print('🎤 音声認識開始');
     
@@ -309,7 +359,10 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     _stopAnalysisTimer();
     
     await _speak('どうぞ');
-    await Future.delayed(Duration(seconds: 1));
+    // TTS完了後、機種差に合わせた短い余裕（設定で0〜2000ms）
+    if (_sttDelayAfterCueMs > 0) {
+      await Future.delayed(Duration(milliseconds: _sttDelayAfterCueMs));
+    }
     
     try {
       print('🎤 音声認識開始（継続待機モード）');
@@ -317,6 +370,8 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       await _speech.listen(
         onResult: (result) {
           if (result.finalResult && result.recognizedWords.isNotEmpty) {
+            if (_currentState != AppState.listening) return;
+            if (_isExecutingCommand) return;
             print('🎯 音声入力: ${result.recognizedWords}');
             _executeCommand(result.recognizedWords);
           }
@@ -337,6 +392,9 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
 
   // コマンド実行
   Future<void> _executeCommand(String command) async {
+    if (_isExecutingCommand) return;
+    _isExecutingCommand = true;
+
     print('⚙️ コマンド実行: $command');
     
     setState(() {
@@ -400,6 +458,8 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     } catch (e) {
       print('コマンド実行エラー: $e');
       await _speak('コマンド実行でエラーが発生しました');
+    } finally {
+      _isExecutingCommand = false;
     }
     
     // コマンド完了後は通常モードに復帰（自動解析再開）
@@ -442,20 +502,12 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       _isSpeaking = true;
       print('🔊 TTS開始: ${text.substring(0, text.length > 30 ? 30 : text.length)}...');
       
-      // 心音を止める必要はなく、_isSpeaking フラグで _playHeartbeat が回避する
-      
       // 案内用音声設定（通常の音量・ピッチ）
       await _tts.setVolume(1.0);
       await _tts.setPitch(1.0);
       
       await _tts.speak(text);
-      
-      // 文字数に基づく推定時間（日本語：1文字約0.12秒）
-      int estimatedDuration = (text.length * 0.12).ceil();
-      int waitTime = (estimatedDuration + 1).clamp(1, 20); // 1秒〜20秒の範囲
-      
-      print('🕰️ TTS完了待機: ${waitTime}秒');
-      await Future.delayed(Duration(seconds: waitTime));
+      // awaitSpeakCompletion(true) により、上記の発話完了まで待機される想定
       print('✅ TTS完了');
       
     } catch (e) {
@@ -505,7 +557,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   String _getStateDisplayName() {
     switch (_currentState) {
       case AppState.normal:
-        return '� 通常解析中';
+        return '🔄 通常解析中';
       case AppState.listening:
         return '🎤 音声待機中';
       case AppState.processing:
@@ -536,6 +588,11 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
         backgroundColor: Colors.blue[700],
         foregroundColor: Colors.white,
         actions: [
+          IconButton(
+            icon: Icon(Icons.tune),
+            tooltip: '音声コマンド待ちの調整',
+            onPressed: _showVoiceTimingDialog,
+          ),
           IconButton(
             icon: Icon(Icons.settings),
             onPressed: _showAISelectionDialog,
@@ -635,6 +692,60 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
               ],
             ),
           ),
+    );
+  }
+
+  void _showVoiceTimingDialog() {
+    int tempMs = _sttDelayAfterCueMs;
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (context, setLocal) {
+            return AlertDialog(
+              title: Text('音声コマンドのタイミング'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '「どうぞ」のあと、マイクが有効になるまでの追加待ち（0〜2000ミリ秒）。'
+                    '早すぎて拾えない場合は増やす、遅いと感じる場合は減らしてください。',
+                    style: TextStyle(fontSize: 13),
+                  ),
+                  SizedBox(height: 12),
+                  Text('${tempMs} ms'),
+                  Slider(
+                    value: tempMs.toDouble(),
+                    min: 0,
+                    max: 2000,
+                    divisions: 40,
+                    label: '${tempMs} ms',
+                    onChanged: (v) {
+                      setLocal(() {
+                        tempMs = v.round();
+                      });
+                    },
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: Text('キャンセル'),
+                ),
+                TextButton(
+                  onPressed: () async {
+                    await _saveSttDelayAfterCueMs(tempMs);
+                    if (context.mounted) Navigator.of(context).pop();
+                  },
+                  child: Text('保存'),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
