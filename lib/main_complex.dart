@@ -92,14 +92,14 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   final WalkingBrain _brain = WalkingBrain(); // 螟ｧ閼ｳ繧ｨ繝ｳ繧ｸ繝ｳ縺ｮ蛻晄悄蛹・
   Timer? _timer;
   bool _cameraAvailable = false;
-  String _version = 'Loading...';
+  final String _version = 'Loading...';
   // _selectedAI 縺ｯ _brain.currentAI 繧剃ｽｿ逕ｨ縺吶ｋ繧医≧縺ｫ螟画峩
   final stt.SpeechToText _speech = stt.SpeechToText();
   bool _speechAvailable = false; // 髻ｳ螢ｰ隱崎ｭ倥′蛻ｩ逕ｨ蜿ｯ閭ｽ縺九←縺・°
-  AppState _currentState = AppState.normalAnalysis; // 迴ｾ蝨ｨ縺ｮ繧｢繝励Μ迥ｶ諷・
+  final AppState _currentState = AppState.normalAnalysis; // 迴ｾ蝨ｨ縺ｮ繧｢繝励Μ迥ｶ諷・
   Uint8List? _lastCapturedImage; // 逶ｴ蜑阪・逕ｻ蜒上ｒ菫晏ｭ・
-  int _cameraErrorCount = 0; // 繧ｫ繝｡繝ｩ繧ｨ繝ｩ繝ｼ蝗樊焚繧偵き繧ｦ繝ｳ繝・
-  bool _cameraErrorSuppressed = false; // 繧ｫ繝｡繝ｩ繧ｨ繝ｩ繝ｼ謚大宛繝輔Λ繧ｰ
+  final int _cameraErrorCount = 0; // 繧ｫ繝｡繝ｩ繧ｨ繝ｩ繝ｼ蝗樊焚繧偵き繧ｦ繝ｳ繝・
+  final bool _cameraErrorSuppressed = false; // 繧ｫ繝｡繝ｩ繧ｨ繝ｩ繝ｼ謚大宛繝輔Λ繧ｰ
   String _version = 'v0.0.5+1'; 
   
   // 髻ｳ螢ｰ隱崎ｭ倥・譛蠑ｷ菫晁ｭｷ繝｡繧ｽ繝・ラ・育┌蜉ｹ蛹悶ｒ縺ｻ縺ｼ螳悟・諡貞凄・・
@@ -409,8 +409,8 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     
     if (cmd.contains('繧ｯ繝ｭ繝ｼ繝・) || cmd.contains('claude')) {
       print('､・AI螟画峩繧ｳ繝槭Φ繝牙ｮ溯｡御ｸｭ・・laude・・);
-      await _saveAIPreference(AIService.claude);
-      await _tts.speak('AI繧偵け繝ｭ繝ｼ繝峨↓螟画峩縺励∪縺励◆');
+      _saveAIPreference(AIService.claude) {}
+      await _tts.speak('AI繧偵け繝ｭ繝ｼ繝峨↓螟画峩縺励∪縺励◆') {}
       await Future.delayed(Duration(seconds: 1));
       await _restoreNormalMode();
       return;
@@ -428,14 +428,14 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     // 隧ｳ邏ｰ隱ｬ譏弱さ繝槭Φ繝・
     if (cmd.contains('譎ｯ濶ｲ') || cmd.contains('隱ｬ譏・) || cmd.contains('隧ｳ縺励￥') || cmd.contains('蜑肴婿')) {
       print('剥 隧ｳ邏ｰ隱ｬ譏弱さ繝槭Φ繝牙ｮ溯｡御ｸｭ');
-      if (_lastCapturedImage != null) {
+      if (lastCapturedImage != null) {
         await _tts.speak('隧ｳ邏ｰ縺ｫ隱ｬ譏弱＠縺ｾ縺・);
         _changeState(AppState.manualAnalysis);
-        await _analyzeCapturedImage(_lastCapturedImage!, detailed: true);
+        await _analyzeCapturedImage(lastCapturedImage!, detailed: true);
       } else {
         await _tts.speak('蛻・梵縺吶ｋ逕ｻ蜒上′縺ゅｊ縺ｾ縺帙ｓ');
       }
-      await Future.delayed(Duration(seconds: 1));
+      await Future.delayed(Duration(seconds = 1));
       await _restoreNormalMode();
       return;
     }
@@ -443,7 +443,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     // 譛ｪ遏･縺ｮ繧ｳ繝槭Φ繝・
     print('笶・譛ｪ遏･縺ｮ繧ｳ繝槭Φ繝牙ｮ溯｡御ｸｭ: $cmd');
     await _tts.speak('繧ｳ繝槭Φ繝峨′逅・ｧ｣縺ｧ縺阪∪縺帙ｓ縺ｧ縺励◆縲ゅ・繝ｫ繝励→險縺・→菴ｿ縺・婿繧定◇縺代∪縺吶・);
-    await Future.delayed(Duration(seconds: 1));
+    await Future.delayed(Duration(seconds = 1));
     await _restoreNormalMode();
   }
 

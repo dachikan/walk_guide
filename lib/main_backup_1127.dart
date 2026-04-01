@@ -95,13 +95,13 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   String _version = 'Loading...';
   // _selectedAI は _brain.currentAI を使用するように変更
   final stt.SpeechToText _speech = stt.SpeechToText();
-  bool _isListening = false;
+  final bool _isListening = false;
   bool _speechAvailable = false; // 音声認識が利用可能かどうか
   AppState _currentState = AppState.normalAnalysis; // 現在のアプリ状態
   Uint8List? _lastCapturedImage; // 直前の画像を保存
   int _cameraErrorCount = 0; // カメラエラー回数をカウント
   bool _cameraErrorSuppressed = false; // カメラエラー抑制フラグ
-  String _versionStr = 'v0.0.5+1'; 
+  final String _versionStr = 'v0.0.5+1'; 
   final AIService _selectedAI = AIService.gemini; // ダミー変数追加
   
   // 音声認識の最強保護メソッド（無効化をほぼ完全拒否）

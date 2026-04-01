@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // HapticFeedback のために追加
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_generative_ai/google_generative_ai.dart';
@@ -8,9 +8,16 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:image_picker/image_picker.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
+import 'package:geolocator/geolocator.dart'; // 位置情報
+import 'package:csv/csv.dart'; // CSV
+import 'walking_route.dart'; // 地点データ
 import 'dart:async';
-import 'dart:typed_data';
 import 'dart:io';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -90,14 +97,28 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   Timer? _analysisTimer;
   bool _cameraAvailable = false;
   String _version = 'Loading...';
-  AIService _selectedAI = AIService.gemini;
+  AIService _selectedAI = AIService.chatgpt;
   final stt.SpeechToText _speech = stt.SpeechToText();
   bool _speechAvailable = false;
   AppState _currentState = AppState.normal;
   Uint8List? _lastImage;
+  Uint8List? _previousImage; // 10秒前（前回）の画像：短期記憶（海馬）用
+  String? _lastAnalysisResult; // 前回の解析結果：差分分析用
   Timer? _heartbeatTimer; // 心音用タイマー
   bool _isSpeaking = false; // TTS発話中かどうかのフラグ
   bool _isExecutingCommand = false; // コマンド処理の再入防止
+  
+  // 小脳（ローカル解析）関連
+  ObjectDetector? _objectDetector;
+  bool _isLocalAnalyzing = false;
+  List<String> _currentDetections = [];
+
+  // お散歩の友（GPSナビゲーション）関連
+  WalkRoute? _selectedRoute;
+  StreamSubscription<Position>? _positionStream;
+  NaviPoint? _lastAnnouncedPoint;
+  double? _currentHeading; // 現在の方位
+
   /// 「どうぞ」発話完了後、STT開始までの追加待ち（ms）。機種差調整用（SharedPreferences）
   int _sttDelayAfterCueMs = 250;
 
@@ -109,11 +130,14 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
 
   Future<void> _initializeAll() async {
     await _initializeCamera();
+    await _initializeLocalAI(); // 小脳の初期化
     await _loadPackageInfo();
     await _loadAIPreference();
     await _loadVoicePrefs();
     await _configureTts();
     await _initializeSpeech();
+    await _initializeLocation(); // GPSナビの初期化
+    await _ensureRouteDirectory(); // ルートディレクトリの準備
     _startAnalysisTimer();
     _startHeartbeat(); // 心音（バイブレーション）開始
     
@@ -121,6 +145,35 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     if (_cameraAvailable) {
       print('🚀 起動直後の自動解析実行');
       _analyzeScene();
+    }
+  }
+
+  /// 外部ストレージのrouteフォルダを準備する
+  Future<void> _ensureRouteDirectory() async {
+    try {
+      Directory? baseDir;
+      if (Platform.isAndroid) {
+        baseDir = await getExternalStorageDirectory(); // Android: /Storage/emulated/0/Android/data/com.example.app/files
+      } else {
+        baseDir = await getApplicationDocumentsDirectory();
+      }
+
+      if (baseDir != null) {
+        final routeDirPath = p.join(baseDir.path, 'route');
+        final routeDir = Directory(routeDirPath);
+        if (!(await routeDir.exists())) {
+          await routeDir.create(recursive: true);
+          print('📁 ルート用ディレクトリを作成しました: $routeDirPath');
+          
+          // 初回作成時にサンプルファイルを置いておくと親切
+          final sampleFile = File(p.join(routeDirPath, 'readme.txt'));
+          await sampleFile.writeAsString('このフォルダに .csv ファイルを置くと「ルート」コマンドで読み込めます。');
+        } else {
+          print('📂 ルート用ディレクトリは既に存在します: $routeDirPath');
+        }
+      }
+    } catch (e) {
+      print('❌ ルートディレクトリ準備エラー: $e');
     }
   }
 
@@ -195,7 +248,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     }
 
     try {
-      _controller = CameraController(widget.camera!, ResolutionPreset.medium);
+      _controller = CameraController(widget.camera!, ResolutionPreset.medium, enableAudio: false);
       await _controller!.initialize();
       
       if (mounted) {
@@ -203,12 +256,95 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
           _cameraAvailable = true;
         });
         print('✅ カメラ初期化完了');
+        
+        // 小脳（ローカル解析）ストリーム開始
+        _startLocalStream();
       }
     } catch (e) {
       print('カメラ初期化失敗: $e');
       setState(() {
         _cameraAvailable = false;
       });
+    }
+  }
+
+  // 小脳（ローカル解析）の初期化
+  Future<void> _initializeLocalAI() async {
+    final options = ObjectDetectorOptions(
+      mode: DetectionMode.stream,
+      classifyObjects: true,
+      multipleObjects: true,
+    );
+    _objectDetector = ObjectDetector(options: options);
+    print('🧠 小脳（ObjectDetector）初期化完了');
+  }
+
+  // カメラストリームによるリアルタイム解析の開始
+  void _startLocalStream() {
+    if (_controller == null || !_controller!.value.isInitialized) return;
+
+    _controller!.startImageStream((CameraImage image) {
+      if (_currentState != AppState.normal || _isLocalAnalyzing) return;
+      _processLocalImage(image);
+    });
+    print('👁️ 小脳ストリーム開始');
+  }
+
+  Future<void> _processLocalImage(CameraImage image) async {
+    if (_objectDetector == null) return;
+    _isLocalAnalyzing = true;
+
+    try {
+      final WriteBuffer allBytes = WriteBuffer();
+      for (final Plane plane in image.planes) {
+        allBytes.putUint8List(plane.bytes);
+      }
+      final bytes = allBytes.done().buffer.asUint8List();
+
+      final Size imageSize = Size(image.width.toDouble(), image.height.toDouble());
+      final InputImageRotation imageRotation = InputImageRotation.rotation0deg;
+      final InputImageFormat inputImageFormat = InputImageFormatValue.fromRawValue(image.format.raw) ?? InputImageFormat.nv21;
+
+      final inputImageData = InputImageMetadata(
+        size: imageSize,
+        rotation: imageRotation,
+        format: inputImageFormat,
+        bytesPerRow: image.planes[0].bytesPerRow,
+      );
+
+      final inputImage = InputImage.fromBytes(bytes: bytes, metadata: inputImageData);
+      final objects = await _objectDetector!.processImage(inputImage);
+
+      List<String> labels = [];
+      bool urgentDanger = false;
+
+      for (var obj in objects) {
+        for (var label in obj.labels) {
+          labels.add(label.text);
+          // 緊急回避判定（例：車が中央に大きく映った場合など、ここでは簡易的に特定のラベルで判定）
+          if (label.text.toLowerCase().contains('car') || label.text.toLowerCase().contains('person')) {
+             // 面積が一定以上なら緊急
+             if ((obj.boundingBox.width * obj.boundingBox.height) > (image.width * image.height * 0.3)) {
+               urgentDanger = true;
+             }
+          }
+        }
+      }
+
+      if (urgentDanger && !_isSpeaking) {
+        // 短い振動で警告（大脳を介さない反射）
+        HapticFeedback.vibrate();
+        print('⚡ 反射：緊急回避バイブ');
+      }
+
+      _currentDetections = labels;
+      
+    } catch (e) {
+      print('小脳解析エラー: $e');
+    } finally {
+      // 負荷軽減のため少し待ってから次へ
+      await Future.delayed(Duration(milliseconds: 500));
+      _isLocalAnalyzing = false;
     }
   }
 
@@ -220,14 +356,15 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       });
     } catch (e) {
       setState(() {
-        _version = 'v0.0.7+3'; // バージョン v0.0.7+3 に更新
+        _version = 'v0.0.9+1'; // バージョン v0.0.9+1 に更新
       });
     }
   }
 
   Future<void> _loadAIPreference() async {
     final prefs = await SharedPreferences.getInstance();
-    final aiIndex = prefs.getInt('selected_ai') ?? 0;
+    // デフォルトを AIService.chatgpt (インデックス 2) に変更
+    final aiIndex = prefs.getInt('selected_ai') ?? 2;
     setState(() {
       _selectedAI = AIService.values[aiIndex];
     });
@@ -259,6 +396,90 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       setState(() {
         _speechAvailable = false;
       });
+    }
+  }
+
+  /// 位置情報とナビゲーションの初期化
+  Future<void> _initializeLocation() async {
+    print('📍 位置情報初期化中...');
+    
+    // パーミッション確認
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    
+    if (permission == LocationPermission.deniedForever) {
+      print('❌ 位置情報パーミッションが永続的に拒否されています');
+      return;
+    }
+
+    // 位置情報の監視開始
+    _positionStream = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 2, // 2メートル移動ごとに更新
+      ),
+    ).listen((Position position) {
+      _checkRoutePoint(position);
+    });
+
+    // 標準ルート（自宅ルート）の自動読み込み
+    _loadDefaultRoute();
+
+    print('✅ 位置情報監視開始');
+  }
+
+  /// 起動時にデフォルトのルートを読み込む
+  Future<void> _loadDefaultRoute() async {
+    try {
+      final String csvContent = await rootBundle.loadString('assets/routes/home_route.csv');
+      await _loadRouteFromCsv(csvContent, "自宅ルート");
+    } catch (e) {
+      print('ℹ️ デフォルトルートの読み込みをスキップ: $e');
+    }
+  }
+
+  /// 現在地とルート上の地点を照合し、案内が必要なら発話する
+  void _checkRoutePoint(Position position) {
+    if (_selectedRoute == null || _isSpeaking) return;
+
+    for (var point in _selectedRoute!.points) {
+      double distance = point.distanceTo(position);
+      
+      // 設定された距離以内に入ったか
+      if (distance <= point.triggerDistance) {
+        // 同じ地点を連続で案内しないように管理
+        if (_lastAnnouncedPoint?.no != point.no) {
+          print('🔔 地点案内実行: ${point.message} (距離: ${distance.toStringAsFixed(1)}m)');
+          _speak(point.message);
+          _lastAnnouncedPoint = point;
+          break;
+        }
+      }
+    }
+  }
+
+  /// ルートCSVの読み込み
+  Future<void> _loadRouteFromCsv(String csvContent, String routeName) async {
+    try {
+      List<List<dynamic>> rows = const CsvToListConverter().convert(csvContent);
+      List<NaviPoint> points = [];
+      
+      for (var row in rows) {
+        if (row.length >= 5) {
+          points.add(NaviPoint.fromCsv(row));
+        }
+      }
+
+      setState(() {
+        _selectedRoute = WalkRoute(name: routeName, points: points);
+        _lastAnnouncedPoint = null;
+      });
+      print('✅ ルート読み込み完了: $routeName (${points.length}地点)');
+      _speak('${routeName}のガイドを開始します');
+    } catch (e) {
+      print('❌ ルート読み込みエラー: $e');
     }
   }
 
@@ -301,19 +522,42 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       // 撮影中に音声待機へ切り替えた場合は解析を中止
       if (_currentState != AppState.normal) return;
 
+      // 短期記憶（海馬）処理：前回の画像をスライド
+      _previousImage = _lastImage;
       _lastImage = bytes;
       
-      String result = await _analyzeWithGemini(bytes);
+      String result;
+      if (_previousImage != null && _lastAnalysisResult != null) {
+        // 短期記憶を活用した差分解析
+        result = await _analyzeWithMemory(bytes, _previousImage!, _lastAnalysisResult!);
+      } else {
+        // 初回または画像がない場合は通常解析
+        result = await _analyzeCurrentAI(bytes);
+      }
+      
       if (_currentState != AppState.normal) return;
 
       // 通常状態でのみTTS実行
       if (_currentState == AppState.normal) {
+        _lastAnalysisResult = result; // 解析結果を記録（次回の海馬用）
         await _speak(result);
         print('🔊 解析結果: $result');
       }
       
     } catch (e) {
       print('解析エラー: $e');
+      if (_currentState == AppState.normal) {
+        await _speak('通信エラー');
+        // ステップ4：詳細エラーを「後出し」で説明
+        String errorDetail = e.toString();
+        if (errorDetail.contains('GenerativeAIException')) {
+          await _speak('AIサービスが一時的に利用できません。時間をおいて試してください。');
+        } else if (errorDetail.contains('SocketException')) {
+          await _speak('インターネット接続を確認してください。');
+        } else {
+          await _speak('詳細な状況： $errorDetail');
+        }
+      }
     }
   }
 
@@ -325,7 +569,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       final bytes = await File(image.path).readAsBytes();
       _lastImage = bytes;
       
-      String result = await _analyzeWithGemini(bytes);
+      String result = await _analyzeCurrentAI(bytes);
       await _speak(result);
       print('🔊 画像解析結果: $result');
       
@@ -434,14 +678,21 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
           // 短く簡潔なプロンプトで即座開始
           await _speak('詳細に説明します');
           
-          // Gemini解析を即座実行（待機時間短縮）
-          print('🔍 Gemini詳細解析開始');
-          String result = await _analyzeWithGemini(_lastImage!, detailedPrompt: true);
-          print('🔍 解析結果取得完了');
-          
-          // 詳細説明を確実に最後まで発話
-          await _speak(result);
-          print('✅ 詳細説明完了');
+          try {
+            // 解析を即座実行（待機時間短縮）
+            print('🔍 AI詳細解析開始');
+            String result = await _analyzeCurrentAI(_lastImage!, detailedPrompt: true);
+            print('🔍 解析結果取得完了');
+            
+            // 詳細説明を確実に最後まで発話
+            await _speak(result);
+            print('✅ 詳細説明完了');
+          } catch (e) {
+            print('詳細説明エラー: $e');
+            await _speak('通信エラー');
+            // ステップ4：詳細エラーを「後出し」
+            await _speak('詳細なエラー内容は次のとおりです。${e.toString()}');
+          }
           
         } else {
           await _speak('分析する画像がありません');
@@ -451,6 +702,18 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
         await _speak('すべての機能を停止しました');
         _stopAnalysisTimer();
         
+      } else if (cmd.contains('じたく')) {
+        final String csvContent = await rootBundle.loadString('assets/routes/home_route.csv');
+        await _loadRouteFromCsv(csvContent, "自宅ルート");
+
+      } else if (cmd.contains('ゆうじん')) {
+        final String csvContent = await rootBundle.loadString('assets/routes/friend_home.csv');
+        await _loadRouteFromCsv(csvContent, "友人自宅ルート");
+
+      } else if (cmd.contains('ルート') || cmd.contains('ナビ')) {
+        // スマホ内の route フォルダにある CSV ファイルを読み込む
+        await _promptRouteSelection();
+
       } else {
         await _speak('コマンドが理解できませんでした。ヘルプと言うと使い方を聞けます。');
       }
@@ -465,6 +728,76 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     // コマンド完了後は通常モードに復帰（自動解析再開）
     await Future.delayed(Duration(seconds: 1));
     _returnToNormal();
+  }
+
+  /// スマホ内部の route フォルダをスキャンし、CSVの読み込みを促す
+  Future<void> _promptRouteSelection() async {
+    try {
+      Directory? baseDir;
+      if (Platform.isAndroid) {
+        baseDir = await getExternalStorageDirectory();
+      } else {
+        baseDir = await getApplicationDocumentsDirectory();
+      }
+
+      if (baseDir != null) {
+        final routeDirPath = p.join(baseDir.path, 'route');
+        final routeDir = Directory(routeDirPath);
+        
+        if (await routeDir.exists()) {
+          final files = routeDir.listSync().whereType<File>().where((f) => f.path.endsWith('.csv')).toList();
+          
+          if (files.isEmpty) {
+            await _speak('route フォルダに CSV ファイルが見つかりませんでした。');
+            return;
+          }
+
+          // 全ファイルを読み込んで、現在地に最も近い地点を含むルートを探す
+          File? bestFile;
+          double minDistance = double.infinity;
+          String bestFileName = "";
+          
+          Position currentPos = await Geolocator.getCurrentPosition();
+
+          for (var file in files) {
+            final content = await file.readAsString();
+            List<List<dynamic>> rows = const CsvToListConverter().convert(content);
+            for (var row in rows) {
+              if (row.length >= 3) {
+                double targetLat = double.tryParse(row[1].toString()) ?? 0;
+                double targetLng = double.tryParse(row[2].toString()) ?? 0;
+                double dist = Geolocator.distanceBetween(currentPos.latitude, currentPos.longitude, targetLat, targetLng);
+                if (dist < minDistance) {
+                  minDistance = dist;
+                  bestFile = file;
+                  bestFileName = p.basename(file.path);
+                }
+              }
+            }
+          }
+
+          if (bestFile != null) {
+            await _speak('現在地に近いルート、 $bestFileName を読み込みます');
+            final content = await bestFile.readAsString();
+            await _loadRouteFromCsv(content, bestFileName);
+          } else {
+            // 見つからない場合は従来通り最新のファイル
+            files.sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
+            final targetFile = files.first;
+            final fileName = p.basename(targetFile.path);
+            await _speak('$fileName を読み込みます');
+            final content = await targetFile.readAsString();
+            await _loadRouteFromCsv(content, fileName);
+          }
+        } else {
+          await _speak('route フォルダが見つかりません。');
+          await _ensureRouteDirectory();
+        }
+      }
+    } catch (e) {
+      print('❌ ルート選択エラー: $e');
+      await _speak('ファイル読み込み中にエラーが発生しました');
+    }
   }
 
   // 通常モードに戻る
@@ -517,6 +850,54 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     }
   }
 
+  // ステップ６：短期記憶（海馬）を活用した解析
+  Future<String> _analyzeWithMemory(Uint8List currentImage, Uint8List previousImage, String previousResult) async {
+    final apiKey = dotenv.env['GEMINI_API_KEY'];
+    if (apiKey == null) {
+      // Gemini が使えない場合は、現在のAIで通常解析（フォールバック）
+      return await _analyzeCurrentAI(currentImage);
+    }
+
+    final model = GenerativeModel(
+      model: 'gemini-2.5-flash-lite',
+      apiKey: apiKey,
+    );
+
+    final promptText = '【重要：短期記憶（海馬）解析】あなたは視覚障害者の歩行介助AIです。'
+        '1枚目の画像は「約10秒前の景色」で、その解析結果は「$previousResult」でした。'
+        '2枚目の画像は「現在の景色」です。'
+        '10秒前との変化（近づいたもの、新しく現れたもの、去ったもの、信号の変化など）を重点的に分析し、'
+        '安全のために知っておくべき「現在の状況」を簡潔に。'
+        '※「前回との差」を説明するのではなく、あくまで「今の状況」として伝えてください。';
+
+    final prompt = TextPart(promptText);
+    final previousPart = DataPart('image/jpeg', previousImage);
+    final currentPart = DataPart('image/jpeg', currentImage);
+
+    try {
+      final response = await model.generateContent([
+        Content.multi([prompt, previousPart, currentPart])
+      ]);
+      return response.text ?? "解析できませんでした";
+    } catch (e) {
+      print('海馬解析エラー: $e');
+      // エラー時は現在のAIで通常解析にフォールバック
+      return await _analyzeCurrentAI(currentImage);
+    }
+  }
+
+  // AI 選択に応じた解析の振り分け
+  Future<String> _analyzeCurrentAI(Uint8List bytes, {bool detailedPrompt = false}) async {
+    switch (_selectedAI) {
+      case AIService.gemini:
+        return await _analyzeWithGemini(bytes, detailedPrompt: detailedPrompt);
+      case AIService.claude:
+        return await _analyzeWithClaude(bytes, detailedPrompt: detailedPrompt);
+      case AIService.chatgpt:
+        return await _analyzeWithChatGPT(bytes, detailedPrompt: detailedPrompt);
+    }
+  }
+
   // Gemini解析
   Future<String> _analyzeWithGemini(Uint8List bytes, {bool detailedPrompt = false}) async {
     final apiKey = dotenv.env['GEMINI_API_KEY'];
@@ -529,20 +910,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       apiKey: apiKey,
     );
 
-    String promptText;
-    if (detailedPrompt) {
-      promptText = '【重要】あなたは視覚障害者の命を預かる歩行介助者です。' +
-          '前方に見える景色、道の状況、障害物、建物、人、車両、信号機、標識など、' +
-          'すべての重要な情報を具体的に日本語で説明してください。' +
-          '少しでも危険の可能性があるものは必ず指摘してください。';
-    } else {
-      promptText = '【緊急重要】あなたは視覚障害者の歩行を支援する介助者AIです。この人の命と安全があなたの判断にかかっています。' +
-          '画像を慎重に分析し、以下の基準で判断してください：' +
-          '■「前方OK」は本当に完全に安全な場合のみ使用' +
-          '■少しでも障害物・段差・工事・人・車両・不明物があれば「前方注意」または具体的位置「○時の方向に△△があります」' +
-          '■見えにくい・判断困難な場合は「注意して進んでください」' +
-          '■安全すぎる判断は良いことです。見落としは絶対に避けてください。';
-    }
+    String promptText = _getPromptText(detailedPrompt);
 
     final prompt = TextPart(promptText);
     final imagePart = DataPart('image/jpeg', bytes);
@@ -552,6 +920,111 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     ]);
 
     return response.text ?? "解析できませんでした";
+  }
+
+  // Claude解析 (Anthropic API)
+  Future<String> _analyzeWithClaude(Uint8List bytes, {bool detailedPrompt = false}) async {
+    final apiKey = dotenv.env['CLAUDE_API_KEY'];
+    if (apiKey == null) throw Exception('Claude APIキーが設定されていません');
+
+    final String base64Image = base64Encode(bytes);
+    final String promptText = _getPromptText(detailedPrompt);
+
+    final response = await http.post(
+      Uri.parse('https://api.anthropic.com/v1/messages'),
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: jsonEncode({
+        'model': 'claude-3-5-sonnet-20240620',
+        'max_tokens': 1024,
+        'messages': [
+          {
+            'role': 'user',
+            'content': [
+              {
+                'type': 'image',
+                'source': {
+                  'type': 'base64',
+                  'media_type': 'image/jpeg',
+                  'data': base64Image,
+                },
+              },
+              {
+                'type': 'text',
+                'text': promptText,
+              }
+            ],
+          }
+        ],
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(utf8.decode(response.bodyBytes));
+      return data['content'][0]['text'] ?? "解析できませんでした";
+    } else {
+      throw Exception('Claude API Error: ${response.statusCode} ${response.body}');
+    }
+  }
+
+  // ChatGPT解析 (OpenAI API)
+  Future<String> _analyzeWithChatGPT(Uint8List bytes, {bool detailedPrompt = false}) async {
+    final apiKey = dotenv.env['OPENAI_API_KEY'];
+    if (apiKey == null) throw Exception('OpenAI APIキーが設定されていません');
+
+    final String base64Image = base64Encode(bytes);
+    final String promptText = _getPromptText(detailedPrompt);
+
+    final response = await http.post(
+      Uri.parse('https://api.openai.com/v1/chat/completions'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $apiKey',
+      },
+      body: jsonEncode({
+        'model': 'gpt-4o-mini',
+        'messages': [
+          {
+            'role': 'user',
+            'content': [
+              {'type': 'text', 'text': promptText},
+              {
+                'type': 'image_url',
+                'image_url': {'url': 'data:image/jpeg;base64,$base64Image'}
+              },
+            ],
+          }
+        ],
+        'max_tokens': 500,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(utf8.decode(response.bodyBytes));
+      return data['choices'][0]['message']['content'] ?? "解析できませんでした";
+    } else {
+      throw Exception('OpenAI API Error: ${response.statusCode} ${response.body}');
+    }
+  }
+
+  // 共通プロンプト取得
+  String _getPromptText(bool detailedPrompt) {
+    if (detailedPrompt) {
+      return '【重要】あなたは視覚障害者の命を預かる歩行介助者です。' 
+          '前方に見える景色、道の状況、障害物、建物、人、車両、信号機、標識など、' 
+          'すべての重要な情報を具体的に日本語で説明してください。' 
+          '少しでも危険の可能性があるものは必ず指摘してください。';
+    } else {
+      return '【緊急重要】あなたは視覚障害者の歩行を支援する介助者AIです。この人の命と安全があなたの判断にかかっています。' 
+          '画像を慎重に分析し、以下の基準で判断してください：' 
+          '■「前方OK」は本当に完全に安全な場合のみ使用' 
+          '■少しでも障害物・段差・工事・人・車両・不明物があれば「前方注意」または具体的位置「○時の方向に△△があります」' 
+          '■見えにくい・判断困難な場合は「注意して進んでください」' 
+          '■安全すぎる判断は良いことです。見落としは絶対に避けてください。';
+    }
   }
 
   String _getStateDisplayName() {
@@ -714,13 +1187,13 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                     style: TextStyle(fontSize: 13),
                   ),
                   SizedBox(height: 12),
-                  Text('${tempMs} ms'),
+                  Text('$tempMs ms'),
                   Slider(
                     value: tempMs.toDouble(),
                     min: 0,
                     max: 2000,
                     divisions: 40,
-                    label: '${tempMs} ms',
+                    label: '$tempMs ms',
                     onChanged: (v) {
                       setLocal(() {
                         tempMs = v.round();
