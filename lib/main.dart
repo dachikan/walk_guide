@@ -18,6 +18,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
+import 'package:url_launcher/url_launcher.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -510,6 +511,13 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   }
 
   Future<void> _analyzeScene() async {
+    // 補助者が設定や地図を操作中の時は、自動解析（クラウドAI）を停止する
+    // これにより誤入力を防ぎ、通信エラーの連呼を防止する
+    if (ModalRoute.of(context)?.isCurrent == false) {
+      print('⏳ 補助者操作中のため解析スキップ');
+      return;
+    }
+
     if (!_cameraAvailable || _controller == null || !_controller!.value.isInitialized) {
       return;
     }
@@ -1062,13 +1070,51 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
         foregroundColor: Colors.white,
         actions: [
           IconButton(
-            icon: Icon(Icons.tune),
-            tooltip: '音声コマンド待ちの調整',
-            onPressed: _showVoiceTimingDialog,
-          ),
-          IconButton(
             icon: Icon(Icons.settings),
-            onPressed: _showAISelectionDialog,
+            onPressed: () {
+              showModalBottomSheet(
+                context: context,
+                builder: (context) => SafeArea(
+                  child: Wrap(
+                    children: [
+                      ListTile(
+                        leading: Icon(Icons.psychology),
+                        title: Text('AIサービス選択'),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _showAISelectionDialog();
+                        },
+                      ),
+                      ListTile(
+                        leading: Icon(Icons.map),
+                        title: Text('ルート選択'),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _showRouteSelectionDialog();
+                        },
+                      ),
+                      ListTile(
+                        leading: Icon(Icons.explore),
+                        title: Text('ルートを表示'),
+                        enabled: _selectedRoute != null,
+                        onTap: () {
+                          Navigator.pop(context);
+                          _showRouteOnMap();
+                        },
+                      ),
+                      ListTile(
+                        leading: Icon(Icons.mic),
+                        title: Text('音声認識調整'),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _showVoiceAdjustmentDialog();
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
           ),
         ],
       ),
@@ -1220,6 +1266,125 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
         );
       },
     );
+  }
+
+  void _showRouteSelectionDialog() {
+    final Map<String, String> availableRoutes = {
+      'home_route.csv': '自宅ルート',
+      'friend_home.csv': '友人の家ルート',
+    };
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('ルート選択'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: availableRoutes.entries.map((entry) => ListTile(
+            title: Text(entry.value),
+            onTap: () async {
+              try {
+                final String csvContent = await rootBundle.loadString('assets/routes/${entry.key}');
+                await _loadRouteFromCsv(csvContent, entry.value);
+                if (context.mounted) Navigator.pop(context);
+              } catch (e) {
+                print('Error: $e');
+              }
+            },
+          )).toList(),
+        ),
+      ),
+    );
+  }
+
+  void _showVoiceAdjustmentDialog() {
+    int tempDelayMs = _sttDelayAfterCueMs;
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setLocal) => AlertDialog(
+          title: Text('音声認識調整'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('待機時間: $tempDelayMs ms'),
+              Slider(
+                value: tempDelayMs.toDouble(),
+                min: 0, max: 2000, divisions: 40,
+                onChanged: (v) => setLocal(() => tempDelayMs = v.round()),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                await _saveSttDelayAfterCueMs(tempDelayMs);
+                if (context.mounted) Navigator.pop(context);
+              },
+              child: Text('保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showRouteOnMap() async {
+    if (_selectedRoute == null || _selectedRoute!.points.isEmpty) return;
+
+    // Google マップの URL スキーム：目的地(destination)と全てのウェイポイント(waypoints)を表示
+    // 最初の地点(0番目)を現在地、それ以外を経路として指定。
+    // 倍率は最大。
+    final points = _selectedRoute!.points;
+    final first = points.first;
+    
+    // 全地点をウェイポイントとして連結
+    String waypoints = "";
+    if (points.length > 1) {
+      waypoints = points.skip(1).map((p) => "${p.latitude},${p.longitude}").join('|');
+    }
+
+    // Google Maps Navigation URL: 地図、歩行モード、目的地、ウェイポイント、最大倍率(ズーム)
+    // 目的地はリストの最後、道中はウェイポイント。
+    final last = points.last;
+    final String urlString = "https://www.google.com/maps/dir/?api=1"
+        "&destination=${last.latitude},${last.longitude}"
+        "&waypoints=$waypoints"
+        "&travelmode=walking";
+        
+    final Uri googleMapsUrl = Uri.parse(urlString);
+
+    if (await canLaunchUrl(googleMapsUrl)) {
+      await launchUrl(googleMapsUrl, mode: LaunchMode.externalApplication);
+    } else {
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('ルートの地点一覧'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: _selectedRoute!.points.length,
+              itemBuilder: (context, index) {
+                final p = _selectedRoute!.points[index];
+                return ListTile(
+                  leading: CircleAvatar(child: Text('${p.no}')),
+                  title: Text(p.message),
+                  subtitle: Text('緯度: ${p.latitude}, 経度: ${p.longitude}'),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('閉じる'),
+            ),
+          ],
+        ),
+      );
+    }
   }
 
   void _showAISelectionDialog() {
