@@ -19,6 +19,7 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:url_launcher/url_launcher.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -1331,58 +1332,21 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   void _showRouteOnMap() async {
     if (_selectedRoute == null || _selectedRoute!.points.isEmpty) return;
 
-    // Google マップの URL スキーム：目的地(destination)と全てのウェイポイント(waypoints)を表示
-    // 最初の地点(0番目)を現在地、それ以外を経路として指定。
-    // 倍率は最大。
-    final points = _selectedRoute!.points;
-    final first = points.first;
-    
-    // 全地点をウェイポイントとして連結
-    String waypoints = "";
-    if (points.length > 1) {
-      waypoints = points.skip(1).map((p) => "${p.latitude},${p.longitude}").join('|');
-    }
+    // 編集可能な地図画面へ遷移
+    final updatedRoute = await Navigator.push<WalkRoute>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => RouteEditPage(route: _selectedRoute!),
+      ),
+    );
 
-    // Google Maps Navigation URL: 地図、歩行モード、目的地、ウェイポイント、最大倍率(ズーム)
-    // 目的地はリストの最後、道中はウェイポイント。
-    final last = points.last;
-    final String urlString = "https://www.google.com/maps/dir/?api=1"
-        "&destination=${last.latitude},${last.longitude}"
-        "&waypoints=$waypoints"
-        "&travelmode=walking";
-        
-    final Uri googleMapsUrl = Uri.parse(urlString);
-
-    if (await canLaunchUrl(googleMapsUrl)) {
-      await launchUrl(googleMapsUrl, mode: LaunchMode.externalApplication);
-    } else {
-      if (!mounted) return;
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text('ルートの地点一覧'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: _selectedRoute!.points.length,
-              itemBuilder: (context, index) {
-                final p = _selectedRoute!.points[index];
-                return ListTile(
-                  leading: CircleAvatar(child: Text('${p.no}')),
-                  title: Text(p.message),
-                  subtitle: Text('緯度: ${p.latitude}, 経度: ${p.longitude}'),
-                );
-              },
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text('閉じる'),
-            ),
-          ],
-        ),
+    if (updatedRoute != null && mounted) {
+      setState(() {
+        _selectedRoute = updatedRoute;
+      });
+      // 実際はファイルの保存処理が必要だが、まずはメモリ上の更新
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('ルートの変更を保存しました（メモリ内）')),
       );
     }
   }
@@ -1417,6 +1381,159 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
           ],
         );
       },
+    );
+  }
+}
+
+class RouteEditPage extends StatefulWidget {
+  final WalkRoute route;
+  const RouteEditPage({super.key, required this.route});
+
+  @override
+  State<RouteEditPage> createState() => _RouteEditPageState();
+}
+
+class _RouteEditPageState extends State<RouteEditPage> {
+  late WalkRoute _editableRoute;
+  final Map<MarkerId, Marker> _markers = {};
+  GoogleMapController? _mapController;
+  bool _isModified = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // ルートのディープコピー（実際はリストのコピー）
+    _editableRoute = WalkRoute(
+      name: widget.route.name,
+      points: List.from(widget.route.points),
+    );
+    _updateMarkers();
+  }
+
+  void _updateMarkers() {
+    _markers.clear();
+    for (int i = 0; i < _editableRoute.points.size; i++) {
+      final p = _editableRoute.points[i];
+      final markerId = MarkerId('marker_$i');
+      _markers[markerId] = Marker(
+        markerId: markerId,
+        position: LatLng(p.latitude, p.longitude),
+        draggable: true,
+        onDragEnd: (newPosition) {
+          setState(() {
+            _editableRoute.points[i] = NaviPoint(
+              no: p.no,
+              latitude: newPosition.latitude,
+              longitude: newPosition.longitude,
+              message: p.message,
+            );
+            _isModified = true;
+          });
+        },
+        infoWindow: InfoWindow(
+          title: '地点 ${p.no}',
+          snippet: p.message,
+          onTap: () => _editPointMessage(i),
+        ),
+      );
+    }
+  }
+
+  Future<void> _editPointMessage(int index) async {
+    final p = _editableRoute.points[index];
+    final TextEditingController controller = TextEditingController(text: p.message);
+    
+    final newMessage = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('地点 ${p.no} のメッセージ編集'),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(labelText: 'メッセージ'),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('キャンセル')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+
+    if (newMessage != null && newMessage != p.message) {
+      setState(() {
+        _editableRoute.points[index] = NaviPoint(
+          no: p.no,
+          latitude: p.latitude,
+          longitude: p.longitude,
+          message: newMessage,
+        );
+        _isModified = true;
+        _updateMarkers();
+      });
+    }
+  }
+
+  Future<bool> _onWillPop() async {
+    if (!_isModified) return true;
+    
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('保存の確認'),
+        content: const Text('変更が保存されていません。保存しますか？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('破棄'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+
+    if (result == null) return false;
+    if (result) {
+      Navigator.pop(context, _editableRoute);
+      return false;
+    }
+    return true;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final initialPosition = _editableRoute.points.isNotEmpty
+        ? LatLng(_editableRoute.points.first.latitude, _editableRoute.points.first.longitude)
+        : const LatLng(35.681236, 139.767125); // 東京駅
+
+    return WillPopScope(
+      onWillPop: _onWillPop,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('ルート編集'),
+          actions: [
+            if (_isModified)
+              IconButton(
+                icon: const Icon(Icons.check),
+                onPressed: () => Navigator.pop(context, _editableRoute),
+              ),
+          ],
+        ),
+        body: GoogleMap(
+          initialCameraPosition: CameraPosition(
+            target: initialPosition,
+            zoom: 15,
+          ),
+          markers: Set<Marker>.of(_markers.values),
+          onMapCreated: (controller) => _mapController = controller,
+          myLocationEnabled: true,
+        ),
+      ),
     );
   }
 }

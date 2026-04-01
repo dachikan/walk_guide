@@ -14,8 +14,8 @@ class NaviPoint {
     required this.no,
     required this.latitude,
     required this.longitude,
-    required this.heading,
-    required this.triggerDistance,
+    this.heading = 0.0,
+    this.triggerDistance = 10.0,
     required this.message,
   });
 
