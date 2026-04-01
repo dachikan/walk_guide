@@ -1096,7 +1096,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                       ),
                       ListTile(
                         leading: Icon(Icons.explore),
-                        title: Text('ルートを表示'),
+                        title: Text('ルートを表示・編集'),
                         enabled: _selectedRoute != null,
                         onTap: () {
                           Navigator.pop(context);
@@ -1332,24 +1332,350 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
   void _showRouteOnMap() async {
     if (_selectedRoute == null || _selectedRoute!.points.isEmpty) return;
 
-    // 編集可能な地図画面へ遷移
-    final updatedRoute = await Navigator.push<WalkRoute>(
-      context,
-      MaterialPageRoute(
-        builder: (context) => RouteEditPage(route: _selectedRoute!),
+    // 「表示」と「編集」を融合させたダイアログを表示
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setStateDialog) {
+          return AlertDialog(
+            title: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(child: Text('${_selectedRoute!.name} 管理・編集')),
+                IconButton(
+                  icon: Icon(Icons.my_location, color: Colors.blue),
+                  tooltip: '現在地を末尾に追加',
+                  onPressed: () => _addNewPointAtCurrentLocation(setStateDialog),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: _selectedRoute!.points.length,
+                itemBuilder: (context, index) {
+                  final p = _selectedRoute!.points[index];
+                  // メッセージを短く表示
+                  final displayMsg = p.message.length > 12 
+                      ? '${p.message.substring(0, 12)}...' 
+                      : p.message;
+
+                  return ListTile(
+                    leading: CircleAvatar(child: Text('${p.no}')),
+                    title: Text(displayMsg),
+                    subtitle: Text('${p.latitude.toStringAsFixed(4)}, ${p.longitude.toStringAsFixed(4)}'),
+                    trailing: IconButton(
+                      icon: Icon(Icons.map, color: Colors.green),
+                      onPressed: () => _openExternalMapForPoint(p),
+                    ),
+                    onLongPress: () => _editPointInDialog(index, setStateDialog),
+                  );
+                },
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => _openExternalMapForAllPoints(),
+                child: Text('全地点を表示'),
+              ),
+              TextButton(
+                onPressed: () async {
+                  await _saveRouteToStorage();
+                  if (context.mounted) Navigator.pop(context);
+                },
+                child: Text('保存して閉じる', style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text('破棄して閉じる', style: TextStyle(color: Colors.red)),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  // 現在地を末尾に新しい地点として追加
+  void _addNewPointAtCurrentLocation(StateSetter setStateDialog) async {
+    if (_selectedRoute == null) return;
+    
+    Position? position;
+    try {
+      position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+    } catch (e) {
+      print("位置情報の取得に失敗: $e");
+    }
+
+    final double lat = position?.latitude ?? 35.6812;
+    final double lng = position?.longitude ?? 139.7671;
+    final int nextNo = _selectedRoute!.points.length + 1;
+
+    setState(() {
+      _selectedRoute!.points.add(NaviPoint(
+        no: nextNo,
+        latitude: lat,
+        longitude: lng,
+        message: '現在地',
+      ));
+    });
+    
+    setStateDialog(() {});
+    
+    // 追加直後に編集画面を開く
+    _editPointInDialog(_selectedRoute!.points.length - 1, setStateDialog);
+  }
+
+  // 特定の地点の編集ダイアログ
+  Future<void> _editPointInDialog(int index, StateSetter setStateDialog) async {
+    final p = _selectedRoute!.points[index];
+    final TextEditingController msgController = TextEditingController(text: p.message);
+    final TextEditingController latController = TextEditingController(text: p.latitude.toStringAsFixed(5));
+    final TextEditingController lngController = TextEditingController(text: p.longitude.toStringAsFixed(5));
+
+    final dynamic result = await showDialog<dynamic>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('地点 ${p.no} の詳細編集'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(controller: msgController, decoration: InputDecoration(labelText: '案内メッセージ')),
+              TextField(controller: latController, decoration: InputDecoration(labelText: '緯度'), keyboardType: TextInputType.numberWithOptions(decimal: true)),
+              TextField(controller: lngController, decoration: InputDecoration(labelText: '経度'), keyboardType: TextInputType.numberWithOptions(decimal: true)),
+              Padding(
+                padding: const EdgeInsets.only(top: 16.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('0.0001度(約11m)移動', style: TextStyle(fontSize: 11, color: Colors.grey)),
+                    ElevatedButton.icon(
+                      icon: Icon(Icons.add_location, size: 18),
+                      label: Text('中間に地点を追加'),
+                      onPressed: () => Navigator.pop(context, 'add_next'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange,
+                        padding: EdgeInsets.symmetric(horizontal: 8),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  IconButton(icon: Icon(Icons.arrow_upward), onPressed: () {
+                    latController.text = (double.parse(latController.text) + 0.0001).toStringAsFixed(5);
+                  }),
+                ],
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  IconButton(icon: Icon(Icons.arrow_back), onPressed: () {
+                    lngController.text = (double.parse(lngController.text) - 0.0001).toStringAsFixed(5);
+                  }),
+                  IconButton(icon: Icon(Icons.arrow_forward), onPressed: () {
+                    lngController.text = (double.parse(lngController.text) + 0.0001).toStringAsFixed(5);
+                  }),
+                ],
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  IconButton(icon: Icon(Icons.arrow_downward), onPressed: () {
+                    latController.text = (double.parse(latController.text) - 0.0001).toStringAsFixed(5);
+                  }),
+                ],
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.delete_forever, color: Colors.red),
+            tooltip: 'この地点を削除',
+            onPressed: () async {
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: Text('地点 ${p.no} の削除'),
+                  content: Text('この地点を削除してもよろしいですか？'),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(context, false), child: Text('キャンセル')),
+                    TextButton(onPressed: () => Navigator.pop(context, true), child: Text('削除', style: TextStyle(color: Colors.red))),
+                  ],
+                ),
+              );
+              if (confirm == true && context.mounted) {
+                Navigator.pop(context, 'delete');
+              }
+            },
+          ),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: Text('キャンセル')),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: Text('適用')),
+        ],
       ),
     );
 
-    if (updatedRoute != null && mounted) {
+    if (result == 'delete') {
+      _deletePoint(index, setStateDialog);
+      return;
+    }
+
+    if (result == 'add_next') {
+      // 現在の地点と次の地点の中間に挿入
+      _insertPointAfter(index, setStateDialog);
+      return;
+    }
+
+    if (result == true) {
       setState(() {
-        _selectedRoute = updatedRoute;
+        _selectedRoute!.points[index] = NaviPoint(
+          no: p.no,
+          latitude: double.tryParse(latController.text) ?? p.latitude,
+          longitude: double.tryParse(lngController.text) ?? p.longitude,
+          message: msgController.text,
+        );
       });
-      // 実際はファイルの保存処理が必要だが、まずはメモリ上の更新
+      setStateDialog(() {}); // 親ダイアログのリフレッシュ
+    }
+  }
+
+  // 特定の地点を削除
+  void _deletePoint(int index, StateSetter setStateDialog) {
+    if (_selectedRoute == null) return;
+    
+    setState(() {
+      _selectedRoute!.points.removeAt(index);
+      // 番号の振り直し
+      for (int i = 0; i < _selectedRoute!.points.length; i++) {
+        final p = _selectedRoute!.points[i];
+        _selectedRoute!.points[i] = NaviPoint(
+          no: i + 1,
+          latitude: p.latitude,
+          longitude: p.longitude,
+          message: p.message,
+          heading: p.heading,
+          triggerDistance: p.triggerDistance,
+        );
+      }
+    });
+
+    setStateDialog(() {});
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('地点を削除しました')),
+    );
+  }
+
+  // 特定の地点の直後に新しい地点を挿入、中間座標を計算
+  void _insertPointAfter(int index, StateSetter setStateDialog) {
+    if (_selectedRoute == null) return;
+    
+    final current = _selectedRoute!.points[index];
+    double newLat, newLng;
+
+    if (index + 1 < _selectedRoute!.points.length) {
+      // 次の地点がある場合、その中間座標を計算
+      final next = _selectedRoute!.points[index + 1];
+      newLat = (current.latitude + next.latitude) / 2;
+      newLng = (current.longitude + next.longitude) / 2;
+    } else {
+      // 次の地点がない（末尾）場合、少しずらす
+      newLat = current.latitude + 0.0001;
+      newLng = current.longitude + 0.0001;
+    }
+
+    setState(() {
+      _selectedRoute!.points.insert(index + 1, NaviPoint(
+        no: 0, // あとで振り直し
+        latitude: newLat,
+        longitude: newLng,
+        message: '追加された地点',
+      ));
+      
+      // 地点番号（no）の全振り直し
+      for (int i = 0; i < _selectedRoute!.points.length; i++) {
+        final p = _selectedRoute!.points[i];
+        _selectedRoute!.points[i] = NaviPoint(
+          no: i + 1,
+          latitude: p.latitude,
+          longitude: p.longitude,
+          message: p.message,
+          heading: p.heading,
+          triggerDistance: p.triggerDistance,
+        );
+      }
+    });
+
+    setStateDialog(() {});
+    
+    // 追加した地点（挿入したインデックス）の編集画面を即座に開く
+    _editPointInDialog(index + 1, setStateDialog);
+  }
+
+  // 特定の地点を外部マップで開く
+  void _openExternalMapForPoint(NaviPoint p) async {
+    final String urlString = "https://www.google.com/maps/search/?api=1&query=${p.latitude},${p.longitude}";
+    final Uri url = Uri.parse(urlString);
+    if (await canLaunchUrl(url)) {
+      await launchUrl(url, mode: LaunchMode.externalApplication);
+    }
+  }
+
+  // 全地点を外部マップで一斉表示（以前の機能の復元）
+  void _openExternalMapForAllPoints() async {
+    if (_selectedRoute == null || _selectedRoute!.points.isEmpty) return;
+    
+    final points = _selectedRoute!.points;
+    String waypoints = "";
+    if (points.length > 1) {
+      waypoints = points.skip(1).map((p) => "${p.latitude},${p.longitude}").join('|');
+    }
+
+    final last = points.last;
+    final String urlString = "https://www.google.com/maps/dir/?api=1"
+        "&destination=${last.latitude},${last.longitude}"
+        "&waypoints=$waypoints"
+        "&travelmode=walking";
+        
+    final Uri url = Uri.parse(urlString);
+    if (await canLaunchUrl(url)) {
+      await launchUrl(url, mode: LaunchMode.externalApplication);
+    }
+  }
+
+  // ルートをShared Preferencesに保存
+  Future<void> _saveRouteToStorage() async {
+    if (_selectedRoute == null) return;
+    
+    final prefs = await SharedPreferences.getInstance();
+    final List<List<dynamic>> rows = _selectedRoute!.points.map((p) => [
+      p.no,
+      p.latitude,
+      p.longitude,
+      p.heading,
+      p.triggerDistance,
+      p.message,
+    ]).toList();
+
+    final csvString = const ListToCsvConverter().convert(rows);
+    // ファイル名（またはキー）として保存
+    await prefs.setString('saved_route_${_selectedRoute!.name}', csvString);
+    
+    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('ルートの変更を保存しました（メモリ内）')),
+        SnackBar(content: Text('${_selectedRoute!.name} を保存しました')),
       );
     }
   }
+
+  // アプリ起動時やルート選択時に保存済みデータがあれば読み込む処理を
+  // 以前のCSV読み込みロジックに統合するか、別途実装が必要です。
 
   void _showAISelectionDialog() {
     showDialog(
@@ -1411,11 +1737,11 @@ class _RouteEditPageState extends State<RouteEditPage> {
   }
 
   void _updateMarkers() {
-    _markers.clear();
-    for (int i = 0; i < _editableRoute.points.size; i++) {
+    final Map<MarkerId, Marker> newMarkers = {};
+    for (int i = 0; i < _editableRoute.points.length; i++) {
       final p = _editableRoute.points[i];
       final markerId = MarkerId('marker_$i');
-      _markers[markerId] = Marker(
+      newMarkers[markerId] = Marker(
         markerId: markerId,
         position: LatLng(p.latitude, p.longitude),
         draggable: true,
@@ -1429,6 +1755,7 @@ class _RouteEditPageState extends State<RouteEditPage> {
             );
             _isModified = true;
           });
+          _updateMarkers(); // 位置更新後にマーカーを再生成
         },
         infoWindow: InfoWindow(
           title: '地点 ${p.no}',
@@ -1437,6 +1764,10 @@ class _RouteEditPageState extends State<RouteEditPage> {
         ),
       );
     }
+    setState(() {
+      _markers.clear();
+      _markers.addAll(newMarkers);
+    });
   }
 
   Future<void> _editPointMessage(int index) async {
@@ -1507,7 +1838,9 @@ class _RouteEditPageState extends State<RouteEditPage> {
 
   @override
   Widget build(BuildContext context) {
-    final initialPosition = _editableRoute.points.isNotEmpty
+    // 緯度経度が0に近い、または取得できていない場合の念のためのチェック
+    final initialPosition = (_editableRoute.points.isNotEmpty && 
+                            _editableRoute.points.first.latitude != 0)
         ? LatLng(_editableRoute.points.first.latitude, _editableRoute.points.first.longitude)
         : const LatLng(35.681236, 139.767125); // 東京駅
 
@@ -1525,13 +1858,35 @@ class _RouteEditPageState extends State<RouteEditPage> {
           ],
         ),
         body: GoogleMap(
+          // AndroidViewの安定化設定
+          layoutDirection: TextDirection.ltr,
+          // 初期位置
           initialCameraPosition: CameraPosition(
             target: initialPosition,
-            zoom: 15,
+            zoom: 17.0, // ズームレベルを上げ、描画領域を限定
           ),
+          // マーカーの指定を明示的に
           markers: Set<Marker>.of(_markers.values),
-          onMapCreated: (controller) => _mapController = controller,
+          onMapCreated: (controller) {
+            _mapController = controller;
+            // 内部的な描画バグ対策: 500ms後にカメラを動かす
+            Future.delayed(const Duration(milliseconds: 800), () {
+              if (_markers.isNotEmpty) {
+                // 最初のマーカーにカメラを確実に合わせる
+                _mapController?.animateCamera(
+                  CameraUpdate.newLatLngZoom(initialPosition, 17.5),
+                );
+              }
+            });
+          },
+          // 衛星写真などのタイル描画を伴う設定を念のため最小限にする
+          mapType: MapType.normal,
           myLocationEnabled: true,
+          myLocationButtonEnabled: true,
+          mapToolbarEnabled: true,
+          zoomControlsEnabled: true,
+          zoomGesturesEnabled: true,
+          scrollGesturesEnabled: true,
         ),
       ),
     );
