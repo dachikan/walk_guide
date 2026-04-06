@@ -50,6 +50,7 @@ flutter:
     - .walking_guide.env
     - assets/routes/home_route.csv
     - assets/routes/friend_home.csv
+    - assets/routes/express_bus_stop.csv
 
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
