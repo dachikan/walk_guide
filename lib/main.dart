@@ -1344,6 +1344,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     final Map<String, String> availableRoutes = {
       'home_route.csv': '自宅ルート',
       'friend_home.csv': '友人の家ルート',
+      'express_bus_stop.csv': '高速バス停ルート',
     };
     showDialog(
       context: context,
