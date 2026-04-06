@@ -358,7 +358,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       });
     } catch (e) {
       setState(() {
-        _version = 'v0.0.9+1'; // バージョン v0.0.9+1 に更新
+        _version = 'v0.0.11+10'; // バージョン v0.0.11+10 に更新
       });
     }
   }
@@ -479,9 +479,76 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
         _lastAnnouncedPoint = null;
       });
       print('✅ ルート読み込み完了: $routeName (${points.length}地点)');
-      _speak('${routeName}のガイドを開始します');
+      await _speak('${routeName}のガイドを開始します');
+      
+      // ルート読み込み直後に即座に方向と距離を案内
+      await _analyzeForNavigation();
     } catch (e) {
       print('❌ ルート読み込みエラー: $e');
+    }
+  }
+
+  /// 現在地から次の目標地点への方向と距離を案内（GPSナビゲーション）
+  Future<void> _analyzeForNavigation() async {
+    if (_selectedRoute == null || _selectedRoute!.points.isEmpty) return;
+    if (_isSpeaking) return;
+
+    try {
+      // 現在地を取得
+      Position currentPos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+
+      // 次の目標地点を特定（まだ到達していない最初の地点）
+      NaviPoint? targetPoint;
+      for (var point in _selectedRoute!.points) {
+        double distance = point.distanceTo(currentPos);
+        
+        // まだ到達していない地点（5m以上離れている）を次の目標とする
+        if (distance > 5.0) {
+          targetPoint = point;
+          break;
+        }
+      }
+
+      // すべての地点に到達済みの場合、最後の地点を目標とする
+      if (targetPoint == null && _selectedRoute!.points.isNotEmpty) {
+        targetPoint = _selectedRoute!.points.last;
+      }
+
+      if (targetPoint == null) return;
+
+      // 距離を計算
+      double currentDistance = targetPoint.distanceTo(currentPos);
+      
+      // 方位を計算（北を0度として時計回りに360度）
+      double bearing = Geolocator.bearingBetween(
+        currentPos.latitude,
+        currentPos.longitude,
+        targetPoint.latitude,
+        targetPoint.longitude,
+      );
+      
+      // 方位を時計の向きに変換（0度=北=12時）
+      int clockDirection = ((bearing + 360) % 360 / 30).round();
+      if (clockDirection == 0) clockDirection = 12;
+
+      // 案内メッセージを作成
+      String targetLabel = targetPoint.message.isNotEmpty ? targetPoint.message : '地点${targetPoint.no}';
+      String promptModifier = '';
+
+      // 3m以内なら到達報告
+      if (currentDistance <= 3.0) {
+        promptModifier = '$targetLabel に到達しました。';
+      } else {
+        promptModifier = '$targetLabel は、${clockDirection}時方向、${currentDistance.toStringAsFixed(0)}メートルです。';
+      }
+
+      print('🧭 ナビゲーション案内: $promptModifier');
+      await _speak(promptModifier);
+
+    } catch (e) {
+      print('❌ ナビゲーション案内エラー: $e');
     }
   }
 
@@ -1383,11 +1450,17 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
                 onPressed: () async {
                   await _saveRouteToStorage();
                   if (context.mounted) Navigator.pop(context);
+                  // 地図ダイアログを閉じた後、即座にナビゲーション案内を再開
+                  await _analyzeForNavigation();
                 },
                 child: Text('保存して閉じる', style: TextStyle(fontWeight: FontWeight.bold)),
               ),
               TextButton(
-                onPressed: () => Navigator.pop(context),
+                onPressed: () async {
+                  if (context.mounted) Navigator.pop(context);
+                  // 地図ダイアログを閉じた後、即座にナビゲーション案内を再開
+                  await _analyzeForNavigation();
+                },
                 child: Text('破棄して閉じる', style: TextStyle(color: Colors.red)),
               ),
             ],
