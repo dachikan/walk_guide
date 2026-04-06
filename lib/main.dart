@@ -727,7 +727,7 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
     
     try {
       if (cmd.contains('ヘルプ') || cmd.contains('help')) {
-        await _speak('使えるコマンドです。AI変更は、ジェミニ、クロード、GPT。詳細説明は、景色、説明。現在のAIは、AI。停止は、とまれ。');
+        await _speak('使えるコマンドです。AI変更は、ジェミニ、クロード、GPT。詳細説明は、景色、説明。現在のAIは、AI。ルート選択は、じたく、ゆうじん、バス。停止は、とまれ。');
         
       } else if (cmd.contains('ai') || cmd.contains('エーアイ') || cmd.contains('現在のai') || cmd.contains('どのai')) {
         String currentAI = AIServiceHelper.getDisplayName(_selectedAI);
@@ -785,6 +785,10 @@ class _WalkingGuideAppState extends State<WalkingGuideApp> {
       } else if (cmd.contains('ゆうじん')) {
         final String csvContent = await rootBundle.loadString('assets/routes/friend_home.csv');
         await _loadRouteFromCsv(csvContent, "友人自宅ルート");
+
+      } else if (cmd.contains('バス') || cmd.contains('ばす')) {
+        final String csvContent = await rootBundle.loadString('assets/routes/express_bus_stop.csv');
+        await _loadRouteFromCsv(csvContent, "高速バス停ルート");
 
       } else if (cmd.contains('ルート') || cmd.contains('ナビ')) {
         // スマホ内の route フォルダにある CSV ファイルを読み込む

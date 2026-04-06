@@ -120,6 +120,7 @@ class _VoiceSettingsScreenState extends State<VoiceSettingsScreen> {
                 'AI変更は、ジェミニ、クロード、GPT。'
                 '詳細説明は、景色、説明。'
                 '現在のAIは、AI。'
+                'ルート選択は、じたく、ゆうじん、バス。'
                 '停止は、とまれ。',
               ),
               icon: const Icon(Icons.volume_up),
